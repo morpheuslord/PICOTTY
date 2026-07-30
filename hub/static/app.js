@@ -550,10 +550,15 @@
       h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider)" },
         h("h4", { style: "margin:0" }, "Macros"),
         h("span", { style: "font-size:12px;color:var(--color-neutral-600)" }, "stored on the hub · replayed as HID + serial steps"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", onClick: () => toast("Editor", "New macro — POST /api/macros") }, "New macro")),
-      h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
-        h("table", { class: "table", style: "width:100%" },
-          h("thead", {}, h("tr", {}, ...["Name", "Group", "Steps", "Runs", "Last run", ""].map((t) => h("th", {}, t)))), rows)));
+        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", onClick: () => openMacroEditor(null) }, "New macro")),
+      state.macros.length
+        ? h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
+            h("table", { class: "table", style: "width:100%" },
+              h("thead", {}, h("tr", {}, ...["Name", "Group", "Steps", "Runs", "Last run", ""].map((t) => h("th", {}, t)))), rows))
+        : h("div", { style: "flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--color-neutral-600);padding:var(--space-4)" },
+            h("div", { style: "font-size:13px;font-weight:600" }, "No macros yet"),
+            h("div", { style: "font-size:12px;max-width:340px;text-align:center;line-height:1.5" }, "Build a reusable sequence — type commands, send keys, insert waits — then replay it on any node in one click."),
+            h("button", { class: "btn btn-primary", onClick: () => openMacroEditor(null) }, "Create your first macro")));
 
     const m = selMacro();
     const stepList = h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" });
@@ -571,9 +576,145 @@
         h("span", { class: "tag tag-outline", style: "padding:1px 7px;margin-top:6px;display:inline-block" }, m ? (m.group || "—") : "—")),
       stepList,
       h("div", { style: "flex:none;padding:var(--space-3) var(--space-4);border-top:2px solid var(--color-divider);display:flex;gap:var(--space-2)" },
-        h("button", { class: "btn btn-secondary", onClick: () => toast("Editor", "Step editor — PATCH /api/macros/{id}") }, "Add step"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto", onClick: () => m && runMacroOn(m.id, state.selId) }, "Run on " + (state.selId || "—"))));
+        h("button", { class: "btn btn-secondary", disabled: !m, onClick: () => m && openMacroEditor(m) }, "Edit"),
+        h("button", { class: "btn btn-ghost", disabled: !m, style: "color:var(--color-accent)", onClick: () => m && deleteMacroById(m.id, m.name) }, "Delete"),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !m || !state.selId, onClick: () => m && runMacroOn(m.id, state.selId) }, "Run on " + (state.selId || "—"))));
     return h("div", { style: "flex:1;display:flex;min-height:0" }, left, right);
+  }
+
+  // ---- macro editor ------------------------------------------------------
+  // Reusable HID sequence builder. Steps are the same shape the firmware's
+  // run_sequence understands: {type:"type",text}, {type:"keys",chord[]},
+  // {delay_ms}. Create -> POST /macros, edit -> PATCH /macros/{id}.
+  function normalizeStep(st) {
+    if (st == null) return null;
+    if (typeof st === "string") {
+      const p = st.split(" "), op = (p[0] || "").toLowerCase(), arg = p.slice(1).join(" ");
+      if (op === "type") return { type: "type", text: arg };
+      if (op === "key" || op === "keys" || op === "chord") return { type: "keys", chord: arg.split("+").map((x) => x.trim().toUpperCase()).filter(Boolean) };
+      if (op === "wait" || op === "delay") return { delay_ms: parseInt(arg, 10) || 0 };
+      return null;
+    }
+    if (st.delay_ms != null) return { delay_ms: st.delay_ms };
+    if (st.type === "type") return { type: "type", text: st.text || "" };
+    if (st.type === "keys") return { type: "keys", chord: st.chord || [] };
+    return null;
+  }
+
+  async function refreshMacros(selectId) {
+    try {
+      const d = await getJSON("/macros");
+      state.macros = (d.macros || []).map((m) => ({ id: m.id, name: m.name, group: m.group, steps: m.steps, runs: m.runs || 0, lastRun: m.ageMs != null ? now() - m.ageMs : null }));
+      if (selectId != null && state.macros.find((m) => m.id === selectId)) state.selMacro = selectId;
+      else if (!state.macros.find((m) => m.id === state.selMacro)) state.selMacro = state.macros.length ? state.macros[0].id : null;
+    } catch (e) { /* keep current view */ }
+    if (state.view === "macros") renderView();
+  }
+
+  function deleteMacroById(id, name) {
+    confirmDialog("Delete macro?", "Delete “" + (name || "this macro") + "”? This cannot be undone.", "Delete", async () => {
+      try { await delJSON("/macros/" + id); if (state.selMacro === id) state.selMacro = null; toast("Macro", "Deleted " + (name || "")); await refreshMacros(); }
+      catch (e) { toast("Failed", "could not delete macro"); }
+    });
+  }
+
+  const closeMacroEditor = () => { const el = $("macro-editor"); if (el) el.remove(); };
+
+  function openMacroEditor(existing) {
+    const draft = {
+      id: existing ? existing.id : null,
+      name: existing ? existing.name : "",
+      group: existing ? (existing.group || "") : "",
+      dangerous: existing ? !!existing.dangerous : false,
+      steps: existing ? (existing.steps || []).map(normalizeStep).filter(Boolean) : [],
+    };
+    let stepKind = "type";
+
+    const stepsHost = h("div", { class: "sc-scroll", style: "max-height:240px;overflow-y:auto;border:1px solid var(--color-divider);border-radius:6px" });
+    function renderSteps() {
+      stepsHost.innerHTML = "";
+      if (!draft.steps.length) { stepsHost.appendChild(h("div", { style: "padding:16px;font-size:12px;color:var(--color-neutral-600);text-align:center" }, "No steps yet — add one below.")); return; }
+      draft.steps.forEach((st, i) => {
+        const d = stepDisplay(st);
+        const swap = (delta) => { const j = i + delta; if (j < 0 || j >= draft.steps.length) return; const t = draft.steps[i]; draft.steps[i] = draft.steps[j]; draft.steps[j] = t; renderSteps(); };
+        stepsHost.appendChild(h("div", { style: "display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--color-divider)" },
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600);width:20px;flex:none" }, String(i + 1).padStart(2, "0")),
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:12px;font-weight:600;width:46px;flex:none;color:" + (d.op === "KEY" ? "var(--color-accent-700)" : "var(--color-neutral-700)") }, d.op),
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:12px;min-width:0;flex:1;word-break:break-all" }, d.arg),
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px", title: "Move up", onClick: () => swap(-1) }, "↑"),
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px", title: "Move down", onClick: () => swap(1) }, "↓"),
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px;color:var(--color-accent)", title: "Remove", onClick: () => { draft.steps.splice(i, 1); renderSteps(); } }, "×")));
+      });
+    }
+
+    const composerHost = h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" });
+    function renderComposer() {
+      composerHost.innerHTML = "";
+      if (stepKind === "type") {
+        const txt = h("input", { class: "input", style: "flex:1;min-width:180px;font-family:ui-monospace,monospace", placeholder: "text to type, e.g.  systemctl status pve" });
+        let nl = true;
+        const add = () => { const v = txt.value; if (!v && !nl) return; draft.steps.push({ type: "type", text: nl ? v + "\n" : v }); txt.value = ""; renderSteps(); txt.focus(); };
+        txt.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+        composerHost.append(txt,
+          h("label", { style: "display:flex;align-items:center;gap:5px;font-size:12px;color:var(--color-neutral-700)" }, h("input", { type: "checkbox", checked: true, style: "accent-color:var(--color-accent)", onChange: (e) => { nl = e.target.checked; } }), "append ⏎"),
+          h("button", { class: "btn btn-secondary", onClick: add }, "Add"));
+      } else if (stepKind === "keys") {
+        const chord = h("input", { class: "input", style: "flex:1;min-width:160px;font-family:ui-monospace,monospace", placeholder: "key or chord, e.g.  ENTER  or  CTRL+ALT+DELETE" });
+        const add = () => { const parts = chord.value.split("+").map((p) => p.trim().toUpperCase()).filter(Boolean); if (!parts.length) return; draft.steps.push({ type: "keys", chord: parts }); chord.value = ""; renderSteps(); chord.focus(); };
+        chord.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+        const chips = ["ENTER", "TAB", "ESCAPE", "CTRL+C", "CTRL+D", "CTRL+ALT+DELETE"].map((k) => h("button", { class: "btn btn-ghost", style: "font-size:11px;padding:2px 7px", onClick: () => { chord.value = k; chord.focus(); } }, k));
+        composerHost.append(chord, h("button", { class: "btn btn-secondary", onClick: add }, "Add"),
+          h("div", { style: "flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;margin-top:2px" }, ...chips));
+      } else {
+        const ms = h("input", { class: "input", type: "number", min: "0", step: "50", value: "500", style: "width:120px" });
+        composerHost.append(h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "wait"), ms, h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "ms"),
+          h("button", { class: "btn btn-secondary", onClick: () => { draft.steps.push({ delay_ms: Math.max(0, Number(ms.value) || 0) }); renderSteps(); } }, "Add"));
+      }
+    }
+
+    const kindSeg = h("div", { class: "seg", style: "align-self:flex-start" },
+      ...[["type", "Type text"], ["keys", "Key / chord"], ["delay", "Wait"]].map(([k, label]) =>
+        h("label", { class: "seg-opt" }, h("input", { type: "radio", name: "stepkind", checked: stepKind === k, onChange: () => { stepKind = k; renderComposer(); } }), label)));
+
+    const nameInput = h("input", { class: "input", style: "flex:1;min-width:180px", value: draft.name, placeholder: "macro name, e.g.  Reboot into BIOS", onInput: (e) => { draft.name = e.target.value; } });
+    const groupInput = h("input", { class: "input", style: "width:170px", value: draft.group, placeholder: "group (optional)", onInput: (e) => { draft.group = e.target.value; } });
+
+    async function save() {
+      const name = draft.name.trim();
+      if (!name) { toast("Failed", "Give the macro a name"); nameInput.focus(); return; }
+      if (!draft.steps.length) { toast("Failed", "Add at least one step"); return; }
+      const payload = { name, steps: draft.steps, group: draft.group.trim(), dangerous: draft.dangerous };
+      try {
+        let id = draft.id;
+        if (id == null) { const r = await postJSON("/macros", payload); id = r.id; }
+        else await patchJSON("/macros/" + id, payload);
+        closeMacroEditor();
+        toast("Macro", (draft.id == null ? "Created " : "Saved ") + name);
+        await refreshMacros(id);
+      } catch (e) { toast("Failed", "could not save macro"); }
+    }
+
+    const card = h("div", { class: "dialog", style: "width:min(700px,94vw);max-height:90vh;display:flex;flex-direction:column", onClick: (e) => e.stopPropagation() },
+      h("div", { class: "dialog-title" }, draft.id == null ? "New macro" : "Edit macro"),
+      h("div", { class: "dialog-body", style: "display:flex;flex-direction:column;gap:14px;overflow-y:auto" },
+        h("div", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }, kicker("Name"), nameInput, groupInput),
+        h("label", { style: "display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-neutral-700);cursor:pointer" },
+          h("input", { type: "checkbox", checked: draft.dangerous, style: "accent-color:var(--color-accent)", onChange: (e) => { draft.dangerous = e.target.checked; } }),
+          "Dangerous — require a confirmation prompt before this macro runs (reboots, power keys, destructive commands)"),
+        h("div", { style: "border-top:1px solid var(--color-divider)" }),
+        h("div", { style: "display:flex;flex-direction:column;gap:8px" }, kicker("Steps"), stepsHost),
+        h("div", { style: "display:flex;flex-direction:column;gap:8px" }, kindSeg, composerHost),
+        h("div", { style: "font-size:11px;color:var(--color-neutral-600);line-height:1.5" }, "Steps run top-to-bottom as one HID sequence and stop on the first error. Reorder with ↑ ↓, remove with ×.")),
+      h("div", { class: "dialog-actions" },
+        (draft.id != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: () => { const nm = draft.name; closeMacroEditor(); deleteMacroById(draft.id, nm); } }, "Delete") : null),
+        h("button", { class: "btn btn-secondary", onClick: closeMacroEditor }, "Cancel"),
+        h("button", { class: "btn btn-primary", onClick: save }, draft.id == null ? "Create macro" : "Save changes")));
+
+    const backdrop = h("div", { id: "macro-editor", class: "dialog-backdrop", style: "z-index:120", onClick: closeMacroEditor }, card);
+    document.body.appendChild(backdrop);
+    renderSteps();
+    renderComposer();
+    nameInput.focus();
   }
 
   // ---- Events view -------------------------------------------------------
