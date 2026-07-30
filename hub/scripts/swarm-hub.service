@@ -1,0 +1,26 @@
+# systemd unit template for the swarm hub. Placeholders (__USER__, __HUBDIR__,
+# __TOKENFILE__) are filled in by install-service.sh. Values are quoted where the
+# path may contain spaces.
+[Unit]
+Description=Swarm controller hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__HUBDIR__
+# Optional: adopt the shared node token from private/hub-token.txt on first start.
+EnvironmentFile=-__TOKENFILE__
+Environment=HUB_HTTP_HOST=0.0.0.0
+Environment=HUB_HTTP_PORT=8080
+Environment=HUB_TCP_HOST=0.0.0.0
+Environment=HUB_TCP_PORT=9000
+Environment="HUB_DB_PATH=__HUBDIR__/data/hub.db"
+Environment="HUB_STATIC_DIR=__HUBDIR__/static"
+ExecStart="__HUBDIR__/.venv/bin/python" -m app.main
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

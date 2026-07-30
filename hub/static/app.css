@@ -1,0 +1,20 @@
+/* App-specific styles, from the design's inline <style> block plus a few helpers. */
+@keyframes sc-blink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+@keyframes sc-pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+html, body { height: 100%; }
+body { margin: 0; overflow: hidden; }
+a { color: var(--color-accent); }
+a:hover { color: var(--color-accent-600); }
+
+/* Dark serial terminal scrollbar */
+.sc-term::-webkit-scrollbar { width: 10px; }
+.sc-term::-webkit-scrollbar-thumb { background: #444141; }
+.sc-term::-webkit-scrollbar-track { background: #1b1918; }
+
+/* Generic thin scrollbars for the rails */
+.sc-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.sc-scroll::-webkit-scrollbar-thumb { background: var(--color-neutral-400); }
+
+.nav a { cursor: pointer; }
+.sc-row:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent) !important; }

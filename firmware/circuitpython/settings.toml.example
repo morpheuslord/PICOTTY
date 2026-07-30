@@ -1,0 +1,78 @@
+# settings.toml — copy to `settings.toml` on the CIRCUITPY drive and edit.
+#
+# CircuitPython reads this file at the root of the drive. os.getenv() returns
+# every value as a STRING even when it looks like a number, so the firmware
+# coerces ints itself. Do not use leading zeros on numbers (they parse as octal),
+# underscores, or 0x/0b prefixes.
+
+# --- Identity (required) -----------------------------------------------------
+# The id baked into this node. It is the ONLY thing tying this physical node to
+# its record in the hub. Keep an id -> target-machine mapping somewhere safe: a
+# node reflashed with the wrong id registers as the wrong machine.
+NODE_ID = "A2"
+
+# Shared secret the hub validates in the first frame. Must match the hub's
+# current node token. Rotating it on the hub only affects NEW connections.
+NODE_TOKEN = "change-me-to-the-hub-token"
+
+# --- Hub location (required) -------------------------------------------------
+# Use the hub's IP, not a hostname: it keeps connect() fast (no DNS), which
+# matters because the watchdog timeout is short.
+HUB_IP = "10.20.0.10"
+HUB_PORT = 9000
+
+# --- Networking (optional) ---------------------------------------------------
+# Leave STATIC_IP unset to use DHCP (the default). Set it for a fixed address;
+# a static node needs no DHCP lease upkeep.
+# STATIC_IP = "10.20.0.51"
+# STATIC_SUBNET = "255.255.255.0"
+# STATIC_GATEWAY = "10.20.0.1"
+# STATIC_DNS = "10.20.0.1"
+
+# Override the auto-derived MAC if you manage MACs centrally. By default each
+# node derives a unique locally-administered MAC from its NODE_ID.
+# NODE_MAC = "02:00:12:34:56:78"
+
+# --- Timing / behavior (optional) --------------------------------------------
+# Heartbeat cadence in ms. The hub can also change this live via a config frame.
+HEARTBEAT_MS = 5000
+
+# Default per-character delay (ms) for typed text when a command does not set
+# its own char_delay_ms. Raise this for slow BIOS/UEFI consoles that drop input.
+CHAR_DELAY_MS = 0
+
+# Delay (ms) after USB enumeration before the first keystroke, so the host is
+# ready to accept input. BIOS targets may want this larger.
+KEYBOARD_SETTLE_MS = 1000
+
+# Reconnect backoff bounds (ms). Grows from start to max on repeated failures.
+RECONNECT_BACKOFF_START_MS = 1000
+RECONNECT_BACKOFF_MAX_MS = 30000
+
+# Hard cap on a single inbound frame (bytes). An oversized length prefix is
+# treated as a desync and drops the connection rather than growing memory.
+MAX_FRAME_BYTES = 16384
+
+# Max target-output bytes forwarded to the hub per loop pass, so a chatty target
+# cannot starve command handling.
+OUTPUT_CHUNK_MAX = 1024
+
+# Serial-write (the `send` command that types into a Linux serial getty).
+# SERIAL_TX_BOUND caps how many bytes may be buffered-but-unsent at once; a
+# `send` that would overflow it is failed with "serial tx backlog" rather than
+# blocking or growing memory. SERIAL_TX_BUDGET caps how many bytes are written
+# to the target per loop pass, so draining a big paste never starves the console
+# read path or trips the watchdog.
+SERIAL_TX_BOUND = 4096
+SERIAL_TX_BUDGET = 1024
+
+# Hardware watchdog: resets the node if the main loop hangs. On the RP2040 the
+# timeout must be <= 8 seconds.
+WATCHDOG_ENABLED = "true"
+WATCHDOG_TIMEOUT_S = 8
+
+# Write faults to /error.txt so you can read them by plugging the Pico into a
+# computer. WARNING: enabling this makes the CIRCUITPY drive READ-ONLY over USB,
+# so drag-drop firmware updates stop working until you re-flash CircuitPython.
+# Leave "false" for normal operation; turn on only to chase a fault.
+LOG_TO_FILE = "false"

@@ -1,0 +1,79 @@
+name: "🐛 Bug report"
+description: "Report something that isn't working the way it should"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please fill this out so it can be reproduced.
+
+        ⚠️ **Do not paste secrets or real identifiers** — no node tokens, real
+        node ids, hub IPs, or target hostnames. Use placeholders. For security
+        vulnerabilities, use the Security tab instead (see SECURITY.md).
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of PICOTTY is affected?
+      options:
+        - Node firmware (CircuitPython)
+        - Hub — TCP / protocol / registry
+        - Hub — REST / WebSocket API
+        - Dashboard (Swarm Control UI)
+        - Scripts (firmware/hub/target-setup)
+        - Docs
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+      placeholder: "When I ... the node/hub/dashboard ... but I expected ..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, commands, and any command output (redact secrets).
+      placeholder: |
+        1. Ran `...`
+        2. Node LED showed ...
+        3. Hub Events showed ...
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Fill in whatever applies.
+      value: |
+        - CircuitPython version (from boot_out.txt):
+        - Board: Raspberry Pi Pico / Pico W / other:
+        - Ethernet HAT: WIZnet W5100S / other:
+        - Hub host OS + Python version:
+        - adafruit_wiznet5k / adafruit_hid versions:
+    validations:
+      required: false
+  - type: textarea
+    id: signals
+    attributes:
+      label: Diagnostics
+      description: >
+        Node LED pattern, `/error.txt` contents (if LOG_TO_FILE was on), `pico-debug`
+        output, and/or relevant hub Events / `journalctl -u swarm-hub` lines.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I removed all secrets and real identifiers from this report.
+          required: true
+        - label: This is not a security vulnerability (those go through the Security tab).
+          required: true

@@ -1,0 +1,50 @@
+name: "✨ Feature request"
+description: "Suggest an enhancement or new capability"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Please keep suggestions aligned with PICOTTY's
+        purpose — managing hardware you own on a network you control.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Node firmware (CircuitPython)
+        - Hub (TCP / API / registry / DB)
+        - Dashboard (Swarm Control UI)
+        - Scripts / deployment / target-setup
+        - Docs
+        - New / cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that's hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should it do? Sketch the behavior, API, or UI if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you weighed, and why this one.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: This fits PICOTTY's scope (managing your own hardware, not attacking third-party systems).
+          required: true

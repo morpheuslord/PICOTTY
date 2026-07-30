@@ -1,0 +1,33 @@
+# Private homelab specifics — node tokens, per-node configs, the seed DB.
+# Never commit this folder.
+private/
+Dev-Docs/
+
+# Optional populated offline-demo data for the dashboard (has real node names).
+# The committed UI ships only a generic placeholder demo.
+hub/static/demo.json
+
+# Hub runtime data (the SQLite database and WAL sidecars)
+hub/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Staged firmware build artifacts (contain the node's real settings.toml)
+firmware/build/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# CircuitPython compile cache (if any lands here)
+*.mpy.bak
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+
