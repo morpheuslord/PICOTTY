@@ -1,7 +1,8 @@
 # Contributing to PICOTTY
 
-Thanks for your interest in improving PICOTTY — a Pico-based serial/HID KVM swarm
-with a central hub and dashboard. This guide covers how the project is laid out,
+Thanks for your interest in improving PICOTTY — a Pico-based networked serial
+console (with keyboard injection) for headless machines, with a central hub and
+dashboard. This guide covers how the project is laid out,
 how to set up a dev loop, and the one rule that matters most: **never commit
 secrets or machine-specific identifiers.**
 
