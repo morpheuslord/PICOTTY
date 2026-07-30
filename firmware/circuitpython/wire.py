@@ -50,8 +50,10 @@ class FrameReader:
         if len(self._buf) < 4 + n:
             return None
         body = bytes(self._buf[4:4 + n])
-        # Shift the remaining bytes down in place; keep the accumulator small.
-        del self._buf[:4 + n]
+        # Drop the consumed frame. CircuitPython's bytearray has no __delitem__
+        # (del buf[:k] raises TypeError), so rebind to the tail slice instead of
+        # deleting in place. Frames are small, so the churn is negligible.
+        self._buf = self._buf[4 + n:]
         try:
             return json.loads(body)
         except ValueError as e:

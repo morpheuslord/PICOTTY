@@ -118,15 +118,59 @@
     if (cur.length > CONSOLE_CAP) cur.splice(0, cur.length - CONSOLE_CAP);
     if (state.view === "nodes" && nodeId === state.selId) appendConsoleLine(cur[cur.length - 1]);
   }
+
+  // Streaming target output. Unlike pushLine (one COMPLETE line per call), serial
+  // getty echo arrives as a byte stream — often a single character per output
+  // frame — so making each frame its own line prints "ls" as "l\ns". Instead we
+  // split only on real line feeds (\n) and CONTINUE the current line (flagged
+  // `open`) until a \n closes it. Stray CR and escapes are cleaned at render.
+  function pushOutputInto(nodeId, text, ts, render) {
+    const cur = state.consoles[nodeId] || (state.consoles[nodeId] = []);
+    text = String(text == null ? "" : text);
+    if (!text) return;
+    const parts = text.split("\n");            // K segments, K-1 line feeds between
+    for (let i = 0; i < parts.length; i++) {
+      const last = cur[cur.length - 1];
+      if (i === 0 && last && last.kind === "out" && last.open) last.text += parts[i];
+      else cur.push({ ts: ts, kind: "out", text: parts[i], open: true });
+      if (i < parts.length - 1) cur[cur.length - 1].open = false;  // a \n ended this line
+    }
+    if (cur.length > CONSOLE_CAP) cur.splice(0, cur.length - CONSOLE_CAP);
+    if (render && state.view === "nodes" && nodeId === state.selId) scheduleConsoleRebuild();
+  }
+  const pushOutput = (nodeId, text) => pushOutputInto(nodeId, text, now(), true);
+
+  // Coalesce bursts (a screenful of output = many frames) into one DOM rebuild
+  // per animation frame, so a chatty target never thrashes the console.
+  let _consoleRebuildQueued = false;
+  function scheduleConsoleRebuild() {
+    if (_consoleRebuildQueued) return;
+    _consoleRebuildQueued = true;
+    requestAnimationFrame(() => { _consoleRebuildQueued = false; rebuildConsole(); });
+  }
   const LINE_COLOR = { in: "#f0ece9", err: "#e0603c", sys: "#8c8683", out: "#c9c4c0" };
   const PREFIX = { in: "›", err: "!", sys: "·", out: "" };
   const PREFIX_COLOR = { in: "#d94f2b", err: "#e0603c", sys: "#6f6a68", out: "#6f6a68" };
+
+  // Target shells emit raw terminal control sequences — colours, cursor moves,
+  // bracketed-paste toggles (ESC[?2004h/l), screen clears (ESC[2J, ESC[H). This
+  // pane is a log view, not a terminal emulator, and colours lines by message
+  // kind rather than by embedded ANSI, so strip the sequences to plain text at
+  // render time. The raw bytes are untouched in the DB and event stream; this
+  // only affects what is drawn.
+  const cleanTerm = (s) => String(s == null ? "" : s)
+    .replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, "")   // CSI: ESC [ … final byte
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")               // OSC: ESC ] … BEL/ST
+    .replace(/\x1b[()#][0-9A-Za-z]/g, "")                        // charset designators: ESC ( B
+    .replace(/\x1b[\x40-\x5a\x5c\x5e\x5f]/g, "")                 // other ESC-Fe (not [ or ], done above)
+    .replace(/\r\n/g, "\n").replace(/\r/g, "")                   // normalise CRLF, drop stray CR
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");           // remaining C0 controls (keep \t, \n)
 
   function lineEl(l) {
     return h("div", { style: "display:flex;gap:10px;white-space:" + (state.wrap ? "pre-wrap" : "pre") },
       h("span", { style: "flex:none;color:#575352;user-select:none" }, hhmmss(l.ts)),
       h("span", { style: "flex:none;width:12px;user-select:none;color:" + PREFIX_COLOR[l.kind] }, PREFIX[l.kind] || ""),
-      h("span", { style: "min-width:0;color:" + (LINE_COLOR[l.kind] || "#c9c4c0") }, l.text));
+      h("span", { style: "min-width:0;color:" + (LINE_COLOR[l.kind] || "#c9c4c0") }, cleanTerm(l.text)));
   }
   function appendConsoleLine(l) {
     if (!ui.term) return;
@@ -640,7 +684,8 @@
   async function backfillNode(id) {
     try {
       const out = await getJSON("/nodes/" + encodeURIComponent(id) + "/output?limit=400");
-      state.consoles[id] = (out.chunks || []).map((c) => ({ ts: c.ts, kind: "out", text: c.text }));
+      state.consoles[id] = [];
+      for (const c of (out.chunks || [])) pushOutputInto(id, c.text, c.ts, false);
       const cmds = await getJSON("/nodes/" + encodeURIComponent(id) + "/commands?limit=40");
       // merge node-scoped commands into history view (keep global list too)
       if (state.view === "nodes" && id === state.selId) rebuildConsole();
@@ -859,7 +904,7 @@
         if (state.view === "nodes") renderNodeList();
         break;
       }
-      case "output": if (ev.id === state.selId) pushLine(ev.id, "out", ev.text); break;
+      case "output": if (ev.id === state.selId) pushOutput(ev.id, ev.text); break;
       case "event": {
         state.events.unshift({ ts: ev.ts, type: ev.type, nodeId: ev.node_id, detail: ev.detail });
         state.events = state.events.slice(0, 100);

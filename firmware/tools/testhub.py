@@ -11,6 +11,7 @@ automated self-test.
     python3 testhub.py --selftest      # run the automated checks, then exit
     python3 testhub.py --selftest --hid # also test keystroke injection (see below)
     python3 testhub.py --token <TOK>   # enforce the node's token (default: accept any)
+    python3 testhub.py --framecheck    # offline framing unit checks; no node/hardware
 
 IMPORTANT — HID side effects: when the node runs a `type`/`keys`/`sequence`
 command it injects those keystrokes over USB into WHATEVER MACHINE THE PICO IS
@@ -26,6 +27,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import struct
 import sys
 import threading
@@ -407,6 +409,110 @@ async def main_async(args):
             return 0
 
 
+# ---- offline framing checks (no node, no hardware) -------------------------
+
+def _import_firmware_wire():
+    """Import the REAL firmware wire.py (../circuitpython/wire.py) so the checks
+    run against the code that ships to nodes, not a copy."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    cp_dir = os.path.abspath(os.path.join(here, os.pardir, "circuitpython"))
+    if cp_dir not in sys.path:
+        sys.path.insert(0, cp_dir)
+    import wire
+    return wire
+
+
+def frame_check() -> bool:
+    """Unit-check the length-prefixed framing in firmware/circuitpython/wire.py.
+
+    Runs with no node attached:  python3 testhub.py --framecheck
+
+    This guards the exact regression that took a node offline in the field: the
+    frame accumulator consumed a parsed frame with `del bytearray[:n]`, which
+    works under CPython but raises TypeError on CircuitPython (its bytearray has
+    no __delitem__). A plain round-trip on your dev machine would pass anyway, so
+    the last check FORCES CircuitPython's restriction to make the bug reproduce
+    here instead of on hardware.
+    """
+    wire = _import_firmware_wire()
+    checks = []
+
+    def ok(name, cond, note=""):
+        checks.append((name, bool(cond)))
+        print(("  " + (GREEN("[PASS]") if cond else RED("[FAIL]")) + " %-22s %s") % (name, note))
+
+    print(CYAN("\n=== framing checks (wire.py) ==="))
+
+    # Two whole frames delivered in one chunk: both pop, buffer ends empty.
+    r = wire.FrameReader()
+    r.feed(wire.encode({"type": "a", "n": 1}) + wire.encode({"type": "b", "n": 2}))
+    m1, m2, m3 = r.pop(), r.pop(), r.pop()
+    ok("two-frames", m1 == {"type": "a", "n": 1} and m2 == {"type": "b", "n": 2} and m3 is None)
+    ok("buffer-drained", len(r._buf) == 0, "%d byte(s) left" % len(r._buf))
+
+    # A single frame dribbled in across several feeds: no premature pop.
+    r = wire.FrameReader()
+    full = wire.encode({"k": "split"})
+    r.feed(full[:2]); a = r.pop()
+    r.feed(full[2:6]); b = r.pop()
+    r.feed(full[6:]); cframe = r.pop()
+    ok("partial-frame", a is None and b is None and cframe == {"k": "split"})
+
+    # A frame followed by the START of the next: popping the first must RETAIN
+    # the trailing bytes. This is the consume path that crashed on hardware.
+    r = wire.FrameReader()
+    f1, f2 = wire.encode({"i": 1}), wire.encode({"i": 2})
+    r.feed(f1 + f2[:3])
+    first = r.pop()
+    leftover = len(r._buf)
+    r.feed(f2[3:])
+    second = r.pop()
+    ok("leftover-retained", first == {"i": 1} and second == {"i": 2} and leftover == 3,
+       "kept %d byte(s) between pops" % leftover)
+
+    # Oversized length prefix -> ProtocolError (no unbounded memory growth).
+    r = wire.FrameReader(max_frame_bytes=16)
+    r.feed(struct.pack(">I", 9999))
+    try:
+        r.pop(); raised = False
+    except wire.ProtocolError:
+        raised = True
+    ok("oversized-rejected", raised)
+
+    # Undecodable JSON body -> ProtocolError.
+    r = wire.FrameReader()
+    bad = b"not-json"
+    r.feed(struct.pack(">I", len(bad)) + bad)
+    try:
+        r.pop(); raised = False
+    except wire.ProtocolError:
+        raised = True
+    ok("bad-json-rejected", raised)
+
+    # CircuitPython parity: force a bytearray with no __delitem__ onto the
+    # accumulator and confirm a frame with trailing bytes still parses. The
+    # fixed consume rebinds a slice; the old `del buf[:n]` raises here exactly
+    # as it did on the Pico.
+    class _NoDelByteArray(bytearray):
+        def __delitem__(self, _key):
+            raise TypeError("'bytearray' object doesn't support item deletion")
+
+    r = wire.FrameReader()
+    r._buf = _NoDelByteArray()
+    r.feed(wire.encode({"cp": "ok"}) + b"\x00\x00")  # trailing bytes force a real consume
+    try:
+        m = r.pop()
+        cp_ok, note = (m == {"cp": "ok"}), "consumed without del"
+    except TypeError as e:
+        cp_ok, note = False, RED("del on bytearray: %s" % e)
+    ok("circuitpython-consume", cp_ok, note)
+
+    passed, total = sum(1 for _, c in checks if c), len(checks)
+    line = "%d/%d framing checks passed" % (passed, total)
+    print(CYAN("=== ") + (GREEN(line) if passed == total else RED(line)) + CYAN(" ===\n"))
+    return passed == total
+
+
 def main():
     ap = argparse.ArgumentParser(description="Mock hub for testing a Pico node")
     ap.add_argument("--host", default="0.0.0.0")
@@ -415,7 +521,11 @@ def main():
     ap.add_argument("--selftest", action="store_true", help="run automated checks then exit")
     ap.add_argument("--hid", action="store_true", help="include keystroke-injection checks in --selftest")
     ap.add_argument("--wait", type=int, default=60, help="seconds to wait for a node in --selftest")
+    ap.add_argument("--framecheck", action="store_true",
+                    help="run offline framing unit checks (no node/hardware) then exit")
     args = ap.parse_args()
+    if args.framecheck:
+        sys.exit(0 if frame_check() else 1)
     try:
         rc = asyncio.run(main_async(args))
     except KeyboardInterrupt:

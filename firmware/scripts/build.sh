@@ -22,7 +22,7 @@
 #   --settings <path> include a specific settings.toml (overrides --node's)
 #   --drive <path>    CIRCUITPY mount (deploy mode; auto-detected if omitted)
 #   --stage [dir]     build a drop-in artifact instead of writing to a board
-#   --cp-version <v>  CircuitPython version for the staged library fetch (default 9.2.1)
+#   --cp-version <v>  CircuitPython version for the staged library fetch (default 10.2.1)
 #   --mpy             compile modules to .mpy (needs mpy-cross)
 #   --no-libs         skip the Adafruit library install
 set -euo pipefail
@@ -33,7 +33,7 @@ SRC_DIR="$FW_DIR/circuitpython"
 PROJ_DIR="$(cd "$FW_DIR/.." && pwd)"
 PRIV_NODES="$PROJ_DIR/private/nodes"
 
-NODE=""; DRIVE=""; MPY=0; LIBS=1; STAGE=0; STAGE_DIR=""; CP_VERSION="9.2.1"; SETTINGS=""
+NODE=""; DRIVE=""; MPY=0; LIBS=1; STAGE=0; STAGE_DIR=""; CP_VERSION="10.2.1"; SETTINGS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --node)  NODE="${2:-}"; shift 2;;

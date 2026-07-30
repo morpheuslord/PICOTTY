@@ -224,14 +224,17 @@ class Database:
         await self._db.commit()
 
     async def list_commands(self, node_id: str, limit=50, before=None, type_=None, status=None) -> list:
-        where = ["node_id=?"]
+        # Qualify every filter column with the commands alias `c`: this query
+        # joins results `r`, and node_id/id/status exist in BOTH tables, so an
+        # unqualified name is "ambiguous column name" to SQLite.
+        where = ["c.node_id=?"]
         args = [node_id]
         if before is not None:
-            where.append("id < ?"); args.append(before)
+            where.append("c.id < ?"); args.append(before)
         if type_:
-            where.append("type=?"); args.append(type_)
+            where.append("c.type=?"); args.append(type_)
         if status:
-            where.append("status=?"); args.append(status)
+            where.append("c.status=?"); args.append(status)
         args.append(limit)
         sql = (
             "SELECT c.*, r.payload AS result_payload FROM commands c "
