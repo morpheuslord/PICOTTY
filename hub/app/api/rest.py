@@ -343,7 +343,11 @@ async def ota_create_bundle(request: Request, body: OTABundleCreate):
     try:
         manifest = hub.ota.create_bundle(body.name, [f.model_dump() for f in body.files])
     except OTAError as e:
-        return JSONResponse(status_code=422, content=err("bad_bundle", str(e)))
+        # Log the specific reason to the audit trail (operator-visible), but don't
+        # echo the exception text back in the HTTP body (py/stack-trace-exposure).
+        await hub.audit("error", None, "OTA bundle rejected: %s" % e)
+        return JSONResponse(status_code=422,
+                            content=err("bad_bundle", "the bundle could not be created; see the events log for the reason"))
     await hub.audit("settings", None, "OTA bundle %s uploaded (%d files)" % (body.name, len(body.files)))
     return {"ok": True, "manifest": manifest}
 
@@ -362,7 +366,10 @@ async def ota_create_bundle_zip(request: Request, body: OTABundleZip):
     try:
         manifest = hub.ota.create_bundle_from_zip(body.name, raw)
     except OTAError as e:
-        return JSONResponse(status_code=422, content=err("bad_bundle", str(e)))
+        # Reason to the audit trail, not the HTTP response (py/stack-trace-exposure).
+        await hub.audit("error", None, "OTA zip bundle rejected: %s" % e)
+        return JSONResponse(status_code=422,
+                            content=err("bad_bundle", "the .zip could not be processed as a firmware bundle; see the events log"))
     await hub.audit("settings", None, "OTA bundle %s uploaded from zip (%d files)" % (body.name, len(manifest["files"])))
     return {"ok": True, "manifest": manifest}
 

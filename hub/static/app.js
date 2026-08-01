@@ -27,10 +27,15 @@
     }
     for (const kid of kids.flat()) {
       if (kid == null || kid === false) continue;
-      // Append real DOM nodes as-is; everything else becomes an escaped text
-      // node. A string is NEVER parsed as HTML, so a value reaching here cannot
-      // inject markup (no innerHTML sink anywhere in this helper) — XSS-safe.
-      e.appendChild(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+      // Any non-Node child is coerced to an ESCAPED text node — never parsed as
+      // HTML (appendChild does not interpret markup, and createTextNode escapes),
+      // so a value reaching here cannot inject script. Real DOM nodes (all built
+      // by this same helper) are appended as-is. There is no innerHTML sink here.
+      if (kid instanceof Node) {
+        e.appendChild(kid);
+      } else {
+        e.appendChild(document.createTextNode(String(kid)));
+      }
     }
     return e;
   }
@@ -86,7 +91,11 @@
     tipTarget = trigger;
     const box = ensureTooltip();
     tipEl.body.textContent = text;
-    tipEl.help.setAttribute("href", "help.html#" + (trigger.getAttribute("data-tip-help") || viewHelpAnchor()));
+    // Sanitize the anchor to a bare fragment id (letters/digits/_/-) before it
+    // becomes an href — so a data-tip-help value can never smuggle a "javascript:"
+    // or other scheme into the link (js/xss, DOM-text-reinterpreted-as-HTML).
+    const anchor = String(trigger.getAttribute("data-tip-help") || viewHelpAnchor()).replace(/[^A-Za-z0-9_-]/g, "");
+    tipEl.help.setAttribute("href", "help.html#" + anchor);
     box.style.display = "block";
     box.style.visibility = "hidden";
     positionTooltip(trigger, box);
