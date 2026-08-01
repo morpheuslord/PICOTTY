@@ -419,6 +419,27 @@ async def checks():
     record("phase10 zip-strips-topdir-and-junk",
            set(paths) == {"boot.py", "code.py"}, "paths=%s" % paths)
 
+    # --- SysRq reboot + custom chords ------------------------------------
+    sn = DriverNode("127.0.0.1", TCP_PORT, "drv-sysrq", TOKEN)
+    await sn.connect()
+    await wait_for(lambda: get_node("drv-sysrq").get("status") == "online")
+    st, _ = http("POST", "/nodes/drv-sysrq/sysrq", {"key": "b"})
+    frame = await sn.expect_frame(lambda fr: fr.get("type") == "sysrq", timeout=4)
+    record("sysrq dispatched", st == 200 and frame.get("key") == "b", "key=%s" % frame.get("key"))
+    stbad, _ = http("POST", "/nodes/drv-sysrq/sysrq", {"key": "bb"})
+    record("sysrq rejects multi-char", stbad != 200 or _.get("ok") is False)
+    await sn.close()
+
+    st, cb = http("POST", "/chords", {"label": "VT2", "chord": ["ctrl", "alt", "f2"]})
+    cid = cb.get("id")
+    _, cl = http("GET", "/chords")
+    made = next((c for c in cl.get("chords", []) if c["id"] == cid), None)
+    record("chord create+normalize", made is not None and made["chord"] == ["CTRL", "ALT", "F2"],
+           "chord=%s" % (made and made["chord"]))
+    http("DELETE", "/chords/%d" % cid)
+    _, cl2 = http("GET", "/chords")
+    record("chord delete", not any(c["id"] == cid for c in cl2.get("chords", [])))
+
     passed = sum(1 for _, ok in _results if ok)
     total = len(_results)
     print("=== %d/%d integration checks passed ===" % (passed, total))

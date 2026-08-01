@@ -32,6 +32,20 @@ class KeysBody(BaseModel):
     chord: List[str]
 
 
+class SysrqBody(BaseModel):
+    key: Optional[str] = "b"   # b=reboot, o=poweroff, s=sync, e=term, i=kill, c=crash
+
+
+class ChordCreate(BaseModel):
+    label: str
+    chord: List[str]
+
+
+class ChordPatch(BaseModel):
+    label: Optional[str] = None
+    chord: Optional[List[str]] = None
+
+
 class SequenceBody(BaseModel):
     steps: List[dict]
     stop_on_error: Optional[bool] = False

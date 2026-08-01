@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- Operator-defined quick chords: a labelled key chord pinned as a composer
+-- button (e.g. "VT2" -> CTRL+ALT+F2). Distinct from macros (multi-step sequences).
+CREATE TABLE IF NOT EXISTS chords (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  label      TEXT NOT NULL,
+  chord      TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 -- Commands staged for an offline node, delivered on its next hello. No FK to
 -- nodes: you may queue for a node the hub has never seen (pre-staged before it
 -- first powers on). status: pending|delivered|expired|cancelled.
@@ -527,6 +536,42 @@ class Database:
         d = dict(row)
         d["payload"] = json.loads(d["payload"])
         return d
+
+    # -- custom chords --------------------------------------------------------
+
+    async def list_chords(self) -> list:
+        async with self._db.execute("SELECT * FROM chords ORDER BY id") as cur:
+            rows = await cur.fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["chord"] = json.loads(d["chord"])
+            out.append(d)
+        return out
+
+    async def create_chord(self, label: str, chord: list) -> int:
+        cur = await self._db.execute(
+            "INSERT INTO chords (label, chord, created_at) VALUES (?, ?, ?)",
+            (label, json.dumps(chord), now_ms()),
+        )
+        await self._db.commit()
+        return cur.lastrowid
+
+    async def update_chord(self, chord_id: int, label=None, chord=None) -> None:
+        sets, args = [], []
+        if label is not None:
+            sets.append("label=?"); args.append(label)
+        if chord is not None:
+            sets.append("chord=?"); args.append(json.dumps(chord))
+        if not sets:
+            return
+        args.append(chord_id)
+        await self._db.execute("UPDATE chords SET %s WHERE id=?" % ", ".join(sets), args)
+        await self._db.commit()
+
+    async def delete_chord(self, chord_id: int) -> None:
+        await self._db.execute("DELETE FROM chords WHERE id=?", (chord_id,))
+        await self._db.commit()
 
     # -- runbooks -------------------------------------------------------------
 

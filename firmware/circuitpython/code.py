@@ -236,6 +236,16 @@ def dispatch(msg, net, injector, backchannel, state, cfg, ota=None):
         except InjectError as e:
             net.send(encode(messages.result(cmd_id, "failed", str(e))))
 
+    elif t == "sysrq":
+        # Magic SysRq (Alt+SysRq+<key>) — a reliable kernel-level reboot/etc. even
+        # when the target is hung. Distinct from `keys` because it must HOLD
+        # Alt+SysRq while tapping the command key.
+        try:
+            injector.sysrq(msg.get("key", "b"))
+            net.send(encode(messages.result(cmd_id, "ok")))
+        except InjectError as e:
+            net.send(encode(messages.result(cmd_id, "failed", str(e))))
+
     elif t == "sequence":
         ok, detail = injector.run_sequence(
             msg.get("steps", []), msg.get("stop_on_error", False)

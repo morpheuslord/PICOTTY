@@ -30,6 +30,8 @@ def build_node_frame(cmd_id: str, command: dict) -> dict:
         return frame
     if ctype == "keys":
         return {"type": "keys", "cmd_id": cmd_id, "chord": command.get("chord", [])}
+    if ctype == "sysrq":
+        return {"type": "sysrq", "cmd_id": cmd_id, "key": command.get("key", "b")}
     if ctype == "sequence":
         frame = {"type": "sequence", "cmd_id": cmd_id, "steps": command.get("steps", [])}
         if command.get("stop_on_error"):

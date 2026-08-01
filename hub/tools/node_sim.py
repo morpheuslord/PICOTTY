@@ -119,6 +119,9 @@ class SimNode:
         elif t == "keys":
             await self.send({"type": "output", "text": "[%s]\n" % "+".join(msg.get("chord", [])), "ts": _ms()})
             await self.send({"type": "result", "cmd_id": cmd_id, "status": "ok"})
+        elif t == "sysrq":
+            await self.send({"type": "output", "text": "[Alt+SysRq+%s]\n" % msg.get("key", "b"), "ts": _ms()})
+            await self.send({"type": "result", "cmd_id": cmd_id, "status": "ok"})
         elif t == "sequence":
             for step in msg.get("steps", []):
                 if step.get("type") == "type":

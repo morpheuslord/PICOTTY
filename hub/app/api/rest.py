@@ -17,9 +17,10 @@ from ..core import Hub
 from ..protocol import validate_send
 from ..utils import gen_token, hash_token, now_ms, verify_password
 from .models import (
-    BulkCmd, CmdBody, ExpectBody, KeysBody, LoginBody, MacroCreate, MacroPatch,
-    MacroRun, NodePatch, OTABundleCreate, OTABundleZip, OTAPush, OTARollout,
-    QueueBody, RunbookCreate, RunbookPatch, RunbookRun, SequenceBody, SettingsPatch,
+    BulkCmd, ChordCreate, ChordPatch, CmdBody, ExpectBody, KeysBody, LoginBody,
+    MacroCreate, MacroPatch, MacroRun, NodePatch, OTABundleCreate, OTABundleZip,
+    OTAPush, OTARollout, QueueBody, RunbookCreate, RunbookPatch, RunbookRun,
+    SequenceBody, SysrqBody, SettingsPatch,
 )
 
 router = APIRouter()
@@ -187,6 +188,49 @@ async def post_ping(request: Request, node_id: str):
 async def post_reboot(request: Request, node_id: str):
     hub = hub_of(request)
     return await hub.send_control(node_id, {"type": "reboot"}, "node reboot requested")
+
+
+@router.post("/nodes/{node_id}/sysrq")
+async def post_sysrq(request: Request, node_id: str, body: SysrqBody):
+    """Magic SysRq over HID (Alt+SysRq+<key>) — reboot a hung target machine.
+    Default key 'b' = immediate reboot. Requires kernel.sysrq on the target."""
+    hub = hub_of(request)
+    key = (body.key or "b").strip().lower()
+    if len(key) != 1:
+        return err("bad_key", "sysrq key must be a single character")
+    return await hub.dispatch_command(node_id, {"type": "sysrq", "key": key})
+
+
+# -- custom chords ------------------------------------------------------------
+
+@router.get("/chords")
+async def list_chords(request: Request):
+    hub = hub_of(request)
+    return {"ok": True, "chords": await hub.db.list_chords()}
+
+
+@router.post("/chords")
+async def create_chord(request: Request, body: ChordCreate):
+    hub = hub_of(request)
+    if not body.label.strip() or not body.chord:
+        return err("bad_chord", "label and a non-empty chord are required")
+    cid = await hub.db.create_chord(body.label.strip(), [k.strip().upper() for k in body.chord if k.strip()])
+    return {"ok": True, "id": cid}
+
+
+@router.patch("/chords/{chord_id}")
+async def patch_chord(request: Request, chord_id: int, body: ChordPatch):
+    hub = hub_of(request)
+    chord = [k.strip().upper() for k in body.chord if k.strip()] if body.chord is not None else None
+    await hub.db.update_chord(chord_id, label=body.label, chord=chord)
+    return {"ok": True}
+
+
+@router.delete("/chords/{chord_id}")
+async def delete_chord(request: Request, chord_id: int):
+    hub = hub_of(request)
+    await hub.db.delete_chord(chord_id)
+    return {"ok": True}
 
 
 @router.get("/nodes/{node_id}/commands")
