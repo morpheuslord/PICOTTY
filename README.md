@@ -18,18 +18,21 @@ browser dashboard to watch every node and drive it, over your management network
 
 ## The dashboard
 
+One page drives the whole swarm. **Click any screenshot to open it at full resolution.**
+
+<p align="center">
+  <a href="pictures/Serial%20Panel.png"><img src="pictures/Serial%20Panel.png" alt="Serial console" width="900"></a><br>
+  <sub><b>Serial console</b> — live target output (ANSI-cleaned) with the HID ⇄ Serial input toggle</sub>
+</p>
+
 <table>
   <tr>
-    <td width="50%"><img src="pictures/Serial%20Panel.png" alt="Serial console" width="100%"><br><sub><b>Serial console</b> — live target output (ANSI-cleaned), HID ⇄ Serial input toggle</sub></td>
-    <td width="50%"><img src="pictures/Macro%20Menu.png" alt="Macro editor" width="100%"><br><sub><b>Macro editor</b> — reusable HID sequences from type / keys / wait steps</sub></td>
+    <td width="50%" align="center"><a href="pictures/Macro%20Menu.png"><img src="pictures/Macro%20Menu.png" alt="Macro editor" width="100%"></a><br><sub><b>Macro editor</b> — reusable HID sequences from type / keys / wait steps</sub></td>
+    <td width="50%" align="center"><a href="pictures/Macro%20Selection.png"><img src="pictures/Macro%20Selection.png" alt="Macro library" width="100%"></a><br><sub><b>Macro library</b> — saved sequences, replayable on any node</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="pictures/Macro%20Selection.png" alt="Macro library" width="100%"><br><sub><b>Macro library</b> — saved sequences, replayable on any node</sub></td>
-    <td width="50%"><img src="pictures/Event%20History.png" alt="Event history" width="100%"><br><sub><b>Event history</b> — every connect, command, and fault, timestamped</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="pictures/Settings.png" alt="Settings" width="100%"><br><sub><b>Settings</b> — heartbeat, retention, token rotation, confirm-dangerous</sub></td>
-    <td width="50%"></td>
+    <td width="50%" align="center"><a href="pictures/Event%20History.png"><img src="pictures/Event%20History.png" alt="Event history" width="100%"></a><br><sub><b>Event history</b> — every connect, command, and fault, timestamped</sub></td>
+    <td width="50%" align="center"><a href="pictures/Settings.png"><img src="pictures/Settings.png" alt="Settings" width="100%"></a><br><sub><b>Settings</b> — heartbeat, retention, token rotation, confirm-dangerous</sub></td>
   </tr>
 </table>
 
@@ -50,11 +53,29 @@ browser dashboard to watch every node and drive it, over your management network
 
 ---
 
-## Hardware at a glance
+## Hardware
 
 Per target machine: a **Raspberry Pi Pico** (or **Pico 2**) + a **WIZnet W5100S
 Ethernet HAT** + a data-capable USB cable + an Ethernet drop. One shared **Pi Zero
 2 W** runs the hub. (The all-in-one **W5100S-EVB-Pico** replaces the Pico + HAT.)
+
+<table>
+  <tr>
+    <td width="50%" align="center"><a href="pictures/Ethernet%20Hat.jpeg"><img src="pictures/Ethernet%20Hat.jpeg" alt="WIZnet W5100S Ethernet HAT" width="100%"></a><br><sub><b>WIZnet W5100S Ethernet HAT</b> — wired Ethernet over SPI</sub></td>
+    <td width="50%" align="center"><a href="pictures/pico_hat_combo.jpeg"><img src="pictures/pico_hat_combo.jpeg" alt="Pico stacked with the Ethernet HAT" width="100%"></a><br><sub><b>Pico + HAT</b> — SPI Ethernet, USB left free for the target</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="pictures/Assembly.jpeg"><img src="pictures/Assembly.jpeg" alt="A node assembled in its 3D-printed enclosure" width="900"></a><br>
+  <sub><b>A node assembled in its 3D-printed enclosure</b></sub>
+</p>
+
+**3D-printable enclosure** — Fusion 360 source, neutral STEP, and a ready-to-slice
+STL in [`Enclosure Cad/`](Enclosure%20Cad):
+[**STL**](Enclosure%20Cad/Enclosure%20Body.stl) ·
+[STEP](Enclosure%20Cad/PICOTTY-ENCLOSURE.step) ·
+[Fusion 360 (.f3d)](Enclosure%20Cad/PICOTTY-ENCLOSURE.f3d)
 
 → Full bill of materials and topology: **[docs/hardware.md](docs/hardware.md)**
 
