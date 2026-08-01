@@ -100,6 +100,11 @@ class OTABundleCreate(BaseModel):
     files: List[OTAFile]
 
 
+class OTABundleZip(BaseModel):
+    name: str
+    zip_b64: str   # base64 of a .zip; the hub decompresses and stages its files
+
+
 class OTAPush(BaseModel):
     bundle: str
 

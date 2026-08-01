@@ -36,8 +36,11 @@ COMMIT_TIMEOUT = 30.0
 RECONNECT_TIMEOUT_MS = 45_000  # how long to wait for the node to come back healthy
 JOB_TTL_MS = 3_600_000
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-_MAX_FILES = 32
-_MAX_FILE_BYTES = 1 << 20  # 1 MiB/file — Pico modules are tiny; this is a sanity cap
+_MAX_FILES = 400              # a full firmware (with lib/) is many files
+_MAX_FILE_BYTES = 1 << 20     # 1 MiB/file — Pico modules are tiny; this is a sanity cap
+_MAX_BUNDLE_BYTES = 8 << 20   # 8 MiB total across a bundle
+# Junk that shows up in zips and must never be staged.
+_ZIP_SKIP = ("__MACOSX/", ".DS_Store", "boot_out.txt", "Thumbs.db")
 
 
 class OTAError(Exception):
@@ -72,6 +75,7 @@ class OTAManager:
         blobs.mkdir(parents=True, exist_ok=True)
         manifest_files = []
         hasher_total = hashlib.sha256()
+        total = 0
         for i, f in enumerate(files):
             path = f.get("path")
             if not _safe_rel(path):
@@ -82,6 +86,9 @@ class OTAManager:
                 raise OTAError("bad base64 for %s" % path)
             if len(content) > _MAX_FILE_BYTES:
                 raise OTAError("%s exceeds %d bytes" % (path, _MAX_FILE_BYTES))
+            total += len(content)
+            if total > _MAX_BUNDLE_BYTES:
+                raise OTAError("bundle exceeds %d bytes total" % _MAX_BUNDLE_BYTES)
             blob = blobs / ("f%d.bin" % i)
             blob.write_bytes(content)
             hasher_total.update(content)
@@ -95,6 +102,42 @@ class OTAManager:
         }
         (bdir / "manifest.json").write_text(json.dumps(manifest))
         return manifest
+
+    def create_bundle_from_zip(self, name: str, zip_bytes: bytes) -> dict:
+        """Build a bundle from an uploaded .zip — the hub decompresses it and
+        stages every file, so an operator can upload firmware/build/<node>.zip
+        (or any zip) instead of picking files one by one.
+
+        A single common top-level directory is stripped (so zipping the FOLDER
+        `Node-Main/` still yields `code.py`, not `Node-Main/code.py`). Junk
+        entries (__MACOSX, .DS_Store, boot_out.txt) are skipped, and every path
+        is validated the same way as a hand-built bundle."""
+        import io
+        import zipfile
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        except zipfile.BadZipFile:
+            raise OTAError("not a valid zip file")
+        names = [i.filename for i in zf.infolist()
+                 if not i.is_dir() and not any(s in i.filename for s in _ZIP_SKIP)]
+        if not names:
+            raise OTAError("zip contains no usable files")
+        # Strip a single shared leading directory if every entry has one.
+        prefix = ""
+        first = names[0].split("/")
+        if len(first) > 1 and all(n.startswith(first[0] + "/") for n in names):
+            prefix = first[0] + "/"
+        files = []
+        for info in zf.infolist():
+            if info.is_dir() or any(s in info.filename for s in _ZIP_SKIP):
+                continue
+            rel = info.filename[len(prefix):] if prefix else info.filename
+            if not rel:
+                continue
+            if not _safe_rel(rel):
+                raise OTAError("unsafe path in zip: %r" % info.filename)
+            files.append({"path": rel, "content_b64": base64.b64encode(zf.read(info)).decode()})
+        return self.create_bundle(name, files)
 
     def list_bundles(self) -> list:
         if not self.dir.exists():
@@ -194,6 +237,12 @@ class OTAManager:
                 return self._fail(job, "commit failed: %s" % commit.get("payload"))
             job["status"] = "committed"
             self._progress(job, "committed", "waiting for node to reboot on new firmware")
+            # Provenance: the node's fw_version comes from code.py's FW_VERSION, not
+            # the bundle name, so record which bundle was pushed for the UI to show.
+            try:
+                await self.hub.db.set_last_ota(node_id, "%s @ %d" % (job["bundle"], now_ms()))
+            except Exception:
+                pass
             await self.hub.audit("cmd", node_id, "OTA committed bundle %s (%s)" % (job["bundle"], job["job_id"]))
 
             # Canary: confirm the node comes back (proof the new firmware booted).

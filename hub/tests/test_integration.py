@@ -400,7 +400,24 @@ async def checks():
 
     await wait_for(lambda: ota_status() == "healthy", timeout=10)
     record("phase10 reconnect-healthy", ota_status() == "healthy", "status=%s" % ota_status())
+    # Provenance: the node should now record which bundle it was flashed with.
+    lota = get_node("drv-ota").get("last_ota") or ""
+    record("phase10 last-ota-recorded", "test-bundle" in lota, "last_ota=%s" % lota)
     await no2.close()
+
+    # ZIP upload: hub decompresses a .zip into a bundle (with a stripped top dir).
+    import io as _io, zipfile as _zip
+    buf = _io.BytesIO()
+    with _zip.ZipFile(buf, "w") as z:
+        z.writestr("Node-X/boot.py", b"# boot\n")
+        z.writestr("Node-X/code.py", b"print('zip fw')\n")
+        z.writestr("Node-X/__MACOSX/junk", b"junk")
+    zb64 = _b64.b64encode(buf.getvalue()).decode()
+    stz, bz = http("POST", "/ota/bundles/zip", {"name": "ziptest", "zip_b64": zb64})
+    paths = [f["path"] for f in bz.get("manifest", {}).get("files", [])] if bz.get("ok") else []
+    record("phase10 zip-upload", stz == 200 and bz.get("ok"), "files=%s" % paths)
+    record("phase10 zip-strips-topdir-and-junk",
+           set(paths) == {"boot.py", "code.py"}, "paths=%s" % paths)
 
     passed = sum(1 for _, ok in _results if ok)
     total = len(_results)

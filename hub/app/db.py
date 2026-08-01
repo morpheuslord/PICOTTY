@@ -160,7 +160,19 @@ class Database:
         await self._db.execute("PRAGMA busy_timeout=3000")
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._db.executescript(SCHEMA)
+        await self._migrate()
         await self._db.commit()
+
+    async def _migrate(self) -> None:
+        """Add columns to existing tables without altering the ones already there.
+        Guarded ALTERs (checked against PRAGMA table_info) keep an already-populated
+        deployment forward-safe."""
+        async with self._db.execute("PRAGMA table_info(nodes)") as cur:
+            cols = {r["name"] for r in await cur.fetchall()}
+        if "last_ota" not in cols:
+            # Which OTA bundle this node was last flashed with (provenance), since
+            # the node's fw_version reflects code.py's FW_VERSION, not the bundle name.
+            await self._db.execute("ALTER TABLE nodes ADD COLUMN last_ota TEXT")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -187,6 +199,11 @@ class Database:
 
     async def touch_node(self, node_id: str, ts: int) -> None:
         await self._db.execute("UPDATE nodes SET last_seen=? WHERE id=?", (ts, node_id))
+        await self._db.commit()
+
+    async def set_last_ota(self, node_id: str, label: str) -> None:
+        """Record the OTA bundle a node was last flashed with (provenance)."""
+        await self._db.execute("UPDATE nodes SET last_ota=? WHERE id=?", (label, node_id))
         await self._db.commit()
 
     async def get_node(self, node_id: str) -> dict:

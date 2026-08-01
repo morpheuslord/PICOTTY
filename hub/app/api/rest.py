@@ -18,8 +18,8 @@ from ..protocol import validate_send
 from ..utils import gen_token, hash_token, now_ms, verify_password
 from .models import (
     BulkCmd, CmdBody, ExpectBody, KeysBody, LoginBody, MacroCreate, MacroPatch,
-    MacroRun, NodePatch, OTABundleCreate, OTAPush, OTARollout, QueueBody,
-    RunbookCreate, RunbookPatch, RunbookRun, SequenceBody, SettingsPatch,
+    MacroRun, NodePatch, OTABundleCreate, OTABundleZip, OTAPush, OTARollout,
+    QueueBody, RunbookCreate, RunbookPatch, RunbookRun, SequenceBody, SettingsPatch,
 )
 
 router = APIRouter()
@@ -301,6 +301,25 @@ async def ota_create_bundle(request: Request, body: OTABundleCreate):
     except OTAError as e:
         return JSONResponse(status_code=422, content=err("bad_bundle", str(e)))
     await hub.audit("settings", None, "OTA bundle %s uploaded (%d files)" % (body.name, len(body.files)))
+    return {"ok": True, "manifest": manifest}
+
+
+@router.post("/ota/bundles/zip")
+async def ota_create_bundle_zip(request: Request, body: OTABundleZip):
+    """Upload a whole firmware as a .zip (e.g. firmware/build/<node>.zip); the hub
+    decompresses it and stages every file — no picking files one by one."""
+    import base64 as _b64
+    from ..ota import OTAError
+    hub = hub_of(request)
+    try:
+        raw = _b64.b64decode(body.zip_b64, validate=True)
+    except Exception:
+        return JSONResponse(status_code=422, content=err("bad_zip", "zip_b64 is not valid base64"))
+    try:
+        manifest = hub.ota.create_bundle_from_zip(body.name, raw)
+    except OTAError as e:
+        return JSONResponse(status_code=422, content=err("bad_bundle", str(e)))
+    await hub.audit("settings", None, "OTA bundle %s uploaded from zip (%d files)" % (body.name, len(manifest["files"])))
     return {"ok": True, "manifest": manifest}
 
 

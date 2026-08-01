@@ -320,6 +320,7 @@ class Hub:
             "group": db_row.get("group_name", ""),
             "notes": db_row.get("notes", ""),
             "fw_version": db_row.get("fw_version"),
+            "last_ota": db_row.get("last_ota"),
             "first_seen": db_row.get("first_seen"),
             "last_seen": (state.last_seen if state else db_row.get("last_seen")),
             "status": "online" if online else "offline",
