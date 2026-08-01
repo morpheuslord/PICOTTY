@@ -71,11 +71,17 @@ Ethernet HAT** + a data-capable USB cable + an Ethernet drop. One shared **Pi Ze
   <sub><b>A node assembled in its 3D-printed enclosure</b></sub>
 </p>
 
-**3D-printable enclosure** — Fusion 360 source, neutral STEP, and a ready-to-slice
-STL in [`Enclosure Cad/`](Enclosure%20Cad):
-[**STL**](Enclosure%20Cad/Enclosure%20Body.stl) ·
-[STEP](Enclosure%20Cad/PICOTTY-ENCLOSURE.step) ·
-[Fusion 360 (.f3d)](Enclosure%20Cad/PICOTTY-ENCLOSURE.f3d)
+### 3D-printable enclosure
+
+<p align="center">
+  <a href="https://3dviewer.net/#model=https://raw.githubusercontent.com/morpheuslord/PICOTTY/main/Enclosure%20Cad/Enclosure%20Body.stl"><img src="pictures/enclosure-turntable.gif" alt="PICOTTY node enclosure — rotating STL preview" width="520"></a><br>
+  <sub>▶ <b><a href="https://3dviewer.net/#model=https://raw.githubusercontent.com/morpheuslord/PICOTTY/main/Enclosure%20Cad/Enclosure%20Body.stl">Open the interactive 3D viewer</a></b> &nbsp;·&nbsp; or click <a href="Enclosure%20Cad/Enclosure%20Body.stl">the STL in the repo</a> for GitHub's built-in 3D viewer</sub>
+</p>
+
+Files in [`Enclosure Cad/`](Enclosure%20Cad):
+[**STL**](Enclosure%20Cad/Enclosure%20Body.stl) (slice & print) ·
+[STEP](Enclosure%20Cad/PICOTTY-ENCLOSURE.step) (neutral CAD) ·
+[Fusion 360 (.f3d)](Enclosure%20Cad/PICOTTY-ENCLOSURE.f3d) (editable source)
 
 → Full bill of materials and topology: **[docs/hardware.md](docs/hardware.md)**
 
