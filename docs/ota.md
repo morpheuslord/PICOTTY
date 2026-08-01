@@ -8,6 +8,7 @@
 - [The push flow](#the-push-flow)
 - [Rollout posture: canary, one node at a time](#rollout-posture-canary-one-node-at-a-time)
 - [The writable-filesystem trade-off](#the-writable-filesystem-trade-off)
+- [When OTA fails: wipe and reflash by hand](#when-ota-fails-wipe-and-reflash-by-hand)
 
 Updating firmware by hand means physically touching every Pico — for a rack of
 nodes that is the real operational cost. CircuitPython can remount its own
@@ -139,3 +140,40 @@ CircuitPython is **read-only over USB**. An OTA-capable node is one you update
 that is the whole point, and it is the production posture (USB drive hidden) you
 would run a deployed node in anyway. A node left in host-writable mode for
 bench work simply won't advertise `ota`, and that is correct.
+
+## When OTA fails: wipe and reflash by hand
+
+The automatic watchdog-revert (rail 4) recovers a node from a *crash-looping*
+update on its own. But some failures need hands-on recovery — an OTA push that
+errors out repeatedly, a bundle that boots but is wrong, a node you simply want to
+re-provision. The catch is that an OTA node's `CIRCUITPY` drive is **read-only over
+USB** (that is the writable-filesystem trade-off above), so you can't just drag new
+files onto it or delete the old ones.
+
+The escape hatch is **`firmware/scripts/wipe-pico.sh`**. It reaches the node over
+the one channel that still works when USB is write-locked — the CircuitPython
+**REPL** on the console serial port — disables the watchdog, and reformats the
+filesystem (`storage.erase_filesystem()`). That returns `CIRCUITPY` to an **empty,
+host-writable** drive, after which you deploy the current firmware by hand exactly
+as you would a fresh board:
+
+```bash
+# 1. Wipe the write-protected node (auto-grants the serial port with sudo chmod).
+bash firmware/scripts/wipe-pico.sh                 # or --dev /dev/ttyACM0
+#    --files instead does a softer delete (keeps lib/); --status just shows the port.
+
+# 2. The drive comes back empty and writable — redeploy the built firmware:
+bash firmware/scripts/build.sh --node <id> --drive /run/media/$USER/CIRCUITPY
+#    …or drag the contents of firmware/build/<id>/ onto CIRCUITPY, then power-cycle.
+```
+
+If the REPL can't be reached at all (no console port, or the watchdog resets the
+board before the wipe lands), fall back to the guaranteed hardware path: hold
+**BOOTSEL** while plugging the Pico in, then drop the CircuitPython `.uf2` (fresh
+install) or Adafruit's `flash_nuke.uf2` (full erase) onto the `RPI-RP2` drive, and
+redeploy. See the script's `--help` for the full manual REPL sequence
+(`Ctrl-C` → `import storage; storage.erase_filesystem()`).
+
+Nothing unique is lost in a wipe: each node's identity lives in
+`private/nodes/<id>/settings.toml`, and `build.sh` re-stitches it back in on the
+next deploy.
