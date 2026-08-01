@@ -55,8 +55,11 @@ class DriverNode:
     async def output(self, text):
         await self.send({"type": "output", "text": text, "ts": 0})
 
-    async def heartbeat(self):
-        await self.send({"type": "heartbeat", "id": self.node_id})
+    async def heartbeat(self, host=None):
+        msg = {"type": "heartbeat", "id": self.node_id}
+        if host is not None:
+            msg["host"] = bool(host)
+        await self.send(msg)
 
     async def expect_frame(self, pred, timeout=5.0):
         """Wait for the next inbound frame matching pred(frame) -> bool."""

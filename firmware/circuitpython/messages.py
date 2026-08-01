@@ -16,9 +16,18 @@ def hello(node_id, token, fw, cap, layout=None):
     return msg
 
 
-def heartbeat(node_id):
-    """Liveness pulse on the heartbeat interval. Not persisted per beat."""
-    return {"type": "heartbeat", "id": node_id}
+def heartbeat(node_id, host=None):
+    """Liveness pulse on the heartbeat interval. Not persisted per beat.
+
+    `host` reports whether the TARGET machine's USB host has us enumerated — a
+    proxy for 'the machine is powered and running'. True = machine up, False =
+    node still powered (e.g. USB standby) but the target is off/hung, None =
+    firmware too old to report it. Lets the hub show target liveness distinctly
+    from node liveness."""
+    msg = {"type": "heartbeat", "id": node_id}
+    if host is not None:
+        msg["host"] = bool(host)
+    return msg
 
 
 def result(cmd_id, status, payload=None):

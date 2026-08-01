@@ -39,6 +39,12 @@ class NodeState:
     # output classifier; None until enough output has been seen.
     prompt_state: Optional[str] = None
     tail: str = ""  # rolling tail of recent output the classifier reads
+    # Target-machine liveness, distinct from node liveness. host_up comes from the
+    # node's heartbeat (USB host enumerated = machine running); None if the
+    # firmware doesn't report it. last_output_at corroborates: fresh serial output
+    # means the machine is definitely alive.
+    host_up: Optional[bool] = None
+    last_output_at: int = 0
 
     # Not part of the persisted model; live socket bookkeeping.
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

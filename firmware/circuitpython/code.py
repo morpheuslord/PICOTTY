@@ -109,6 +109,18 @@ class StatusLED:
 STATUS = None  # set in main(); referenced by feed() so every loop updates the LED
 
 
+def host_present():
+    """True if the TARGET's USB host has enumerated us — a proxy for 'the machine
+    is powered and running'. False when the node is still powered (e.g. the target
+    supplies USB standby 5V) but the target itself is off or hung, which is how a
+    node reports a DEAD machine while it is still alive to the hub. Returns None if
+    the runtime doesn't expose it."""
+    try:
+        return bool(supervisor.runtime.usb_connected)
+    except Exception:
+        return None
+
+
 def was_watchdog_reset():
     """True if this boot followed a watchdog reset (i.e. the loop hung last time)."""
     try:
@@ -376,7 +388,9 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
 
         # 3) Heartbeat on interval (interval may have changed via a config frame).
         if now - last_hb >= state.heartbeat_ms * 1_000_000:
-            net.send(encode(messages.heartbeat(cfg.node_id)))
+            # Carry target-machine liveness (USB host present) so the hub can show
+            # whether the attached MACHINE is up, distinct from the node itself.
+            net.send(encode(messages.heartbeat(cfg.node_id, host_present())))
             last_hb = now
             # Reaching a heartbeat means we booted, networked, connected, and ran
             # the loop — healthy enough to finalize a pending OTA update (drop the

@@ -90,9 +90,15 @@ class SimNode:
     async def _heartbeat(self):
         while True:
             await asyncio.sleep(self.args.heartbeat / 1000)
-            await self.send({"type": "heartbeat", "id": self.args.id})
+            # host reports target-machine liveness. --dead-target simulates a
+            # machine that is off/hung while the node stays powered.
+            await self.send({"type": "heartbeat", "id": self.args.id,
+                             "host": not self.args.dead_target})
 
     async def _chatter(self):
+        # A dead target emits nothing, so recent-output can't mark it alive.
+        if self.args.dead_target:
+            return
         while True:
             await asyncio.sleep(random.uniform(3, 8))
             await self.send({
@@ -247,6 +253,8 @@ def main():
     ap.add_argument("--ota", action="store_true",
                     help="advertise the 'ota' capability and accept firmware pushes (in-memory, no fs writes)")
     ap.add_argument("--layout", default="us", help="keyboard layout the node reports (us/de/uk/...)")
+    ap.add_argument("--dead-target", action="store_true",
+                    help="report the attached machine as OFF/dead (host=False) in heartbeats")
     ap.add_argument("--heartbeat", type=int, default=5000, help="ms")
     args = ap.parse_args()
     try:

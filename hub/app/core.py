@@ -279,6 +279,34 @@ class Hub:
         state.rtt_ms = rtt
         return rtt
 
+    # -- target (attached machine) liveness -----------------------------------
+
+    # A machine is considered alive if it emitted serial output this recently,
+    # even when its firmware doesn't report USB host state.
+    TARGET_OUTPUT_FRESH_MS = 30_000
+
+    def target_state(self, state) -> str:
+        """Liveness of the MACHINE attached to a node, distinct from the node.
+
+        Returns:
+          "up"      — the machine is running (USB host enumerated, or it emitted
+                      serial output within the last ~30s).
+          "down"    — the node is alive but the target's USB host is gone: the
+                      machine is off/hung while the node stays powered (USB standby).
+          "unknown" — the node is offline (so we can't tell — likely no power at
+                      all), or its firmware is too old to report host state and it
+                      has been quiet.
+        """
+        if state is None or state.status == "offline":
+            return "unknown"
+        if state.last_output_at and (now_ms() - state.last_output_at) < self.TARGET_OUTPUT_FRESH_MS:
+            return "up"
+        if state.host_up is True:
+            return "up"
+        if state.host_up is False:
+            return "down"
+        return "unknown"
+
     # -- view merge -----------------------------------------------------------
 
     def merge_node(self, db_row: dict) -> dict:
@@ -299,6 +327,8 @@ class Hub:
             "capabilities": state.capabilities if state else [],
             "layout": state.layout if state else "us",
             "prompt_state": state.prompt_state if online else None,
+            "target": self.target_state(state),
+            "host_up": (state.host_up if online else None),
             "connected_at": state.connected_at if state else None,
             "rtt_ms": state.rtt_ms if online else None,
             "inflight": len(state.inflight) if state else 0,

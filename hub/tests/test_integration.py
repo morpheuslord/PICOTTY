@@ -85,6 +85,30 @@ async def checks():
     record("phase4 layout-passthrough", get_node("drv-1").get("layout") == "us")
     await n.close()
 
+    # --- Target-machine liveness (node vs. attached machine) -------------
+    tn = DriverNode("127.0.0.1", TCP_PORT, "drv-host", TOKEN)
+    await tn.connect()
+    await wait_for(lambda: get_node("drv-host").get("status") == "online")
+    # Machine up: node reports the USB host is present.
+    await tn.heartbeat(host=True)
+    await wait_for(lambda: get_node("drv-host").get("target") == "up")
+    record("target up (host present)", get_node("drv-host").get("target") == "up",
+           "target=%s" % get_node("drv-host").get("target"))
+    # Machine dead: node still alive but the target's USB host is gone.
+    await tn.heartbeat(host=False)
+    await wait_for(lambda: get_node("drv-host").get("target") == "down")
+    record("target down (host gone, node alive)", get_node("drv-host").get("target") == "down",
+           "target=%s" % get_node("drv-host").get("target"))
+    # Fresh serial output proves the machine is alive regardless of host flag.
+    await tn.output("root@box:~# uptime\n")
+    await wait_for(lambda: get_node("drv-host").get("target") == "up")
+    record("target up (recent output)", get_node("drv-host").get("target") == "up")
+    await tn.close()
+    # Node offline -> target unknown (can't tell; likely no power).
+    await wait_for(lambda: get_node("drv-host").get("status") == "offline")
+    record("target unknown when node offline", get_node("drv-host").get("target") == "unknown",
+           "target=%s" % get_node("drv-host").get("target"))
+
     # --- Phase 5: expect engine ------------------------------------------
     n = DriverNode("127.0.0.1", TCP_PORT, "drv-exp", TOKEN)
     await n.connect()

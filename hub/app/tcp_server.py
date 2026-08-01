@@ -28,9 +28,14 @@ async def handle_message(hub: Hub, state: NodeState, msg: dict) -> None:
     mtype = msg.get("type")
 
     if mtype == "heartbeat":
-        # Registry-only refresh (already done above); push a compact pulse.
+        # Carry the target-machine liveness the node reported, if any.
+        if "host" in msg:
+            state.host_up = bool(msg.get("host"))
+        # Registry-only refresh (already done above); push a compact pulse that
+        # includes the derived target state so browsers update the machine badge.
         hub.eventbus.broadcast(
-            {"event": "heartbeat", "id": state.node_id, "ts": state.last_seen, "rtt_ms": state.rtt_ms}
+            {"event": "heartbeat", "id": state.node_id, "ts": state.last_seen,
+             "rtt_ms": state.rtt_ms, "target": hub.target_state(state)}
         )
 
     elif mtype == "result":
@@ -74,6 +79,7 @@ async def handle_message(hub: Hub, state: NodeState, msg: dict) -> None:
         # time. Node `ts` is advisory ordering only and must never be shown as an
         # absolute time anywhere.
         ts = now_ms()
+        state.last_output_at = ts  # fresh output => the target machine is alive
         hub.db.append_output(state.node_id, text, ts, cmd_id=cmd_id)  # batched
         hub.eventbus.send_to_subscribers(
             state.node_id, {"event": "output", "id": state.node_id, "ts": ts, "text": text}
