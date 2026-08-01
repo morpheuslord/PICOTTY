@@ -36,21 +36,106 @@
   }
   const $ = (id) => document.getElementById(id);
 
-  // ---- help affordance ---------------------------------------------------
-  // Small, unobtrusive "?" that deep-links into help.html at a feature anchor
-  // (opens in a new tab). Reused everywhere so the docs stay one click from every
-  // control. `label` seeds the hover tooltip and the accessible name.
-  function helpLink(anchor, label, opts) {
-    const size = (opts && opts.size) || 15;
-    return h("a", {
-      href: "help.html#" + anchor, target: "_blank", rel: "noopener",
-      "aria-label": "Help: " + (label || anchor),
-      title: (label ? label + " — " : "") + "open the docs for this feature (new tab)",
-      onClick: (e) => e.stopPropagation(),   // never trigger the control it sits on
-      style: "flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:" +
-        size + "px;height:" + size + "px;font-size:11px;line-height:1;font-weight:600;color:var(--color-neutral-600);" +
-        "border:1px solid var(--color-divider);border-radius:50%;text-decoration:none;cursor:help;user-select:none",
-    }, "?");
+  // ---- custom tooltip system ---------------------------------------------
+  // Replaces the native `title=""` box AND the old standalone "?" helpLink icon.
+  // A single floating tooltip is appended to <body> and driven by a DELEGATED
+  // listener on document: any element carrying `data-tip` shows a polished box on
+  // hover/focus, and if it also carries `data-tip-help` the docs "?" lives INSIDE
+  // that box (opening help.html#<anchor> in a new tab). Hover-intent keeps the "?"
+  // clickable: leaving the trigger delays the hide, and moving onto the tooltip
+  // cancels it. Tooltip text is developer-authored static strings; content is
+  // built with textContent / h(), never innerHTML.
+
+  // Attrs fragment to spread into h(tag, { ...tip(text, anchor), … }).
+  function tip(text, anchor) {
+    const a = {};
+    if (text) a["data-tip"] = text;
+    if (anchor) a["data-tip-help"] = anchor;
+    return a;
+  }
+  // Imperative variant: stamp the dataset onto an existing node and return it.
+  function withTip(node, text, anchor) {
+    if (node && text) node.setAttribute("data-tip", text);
+    if (node && anchor) node.setAttribute("data-tip-help", anchor);
+    return node;
+  }
+
+  const tipEl = {};            // lazily-built singleton refs
+  let tipHideTimer = null;
+  let tipTarget = null;        // the trigger currently described
+
+  function clearTipHide() { if (tipHideTimer) { clearTimeout(tipHideTimer); tipHideTimer = null; } }
+  function scheduleTipHide() { clearTipHide(); tipHideTimer = setTimeout(hideTooltip, 180); }
+
+  function ensureTooltip() {
+    if (tipEl.box) return tipEl.box;
+    const helpA = h("a", { class: "sc-tip-help", target: "_blank", rel: "noopener",
+      "aria-label": "Open the docs for this feature (new tab)",
+      onClick: (e) => e.stopPropagation() }, "?");
+    const foot = h("div", { class: "sc-tip-foot" }, h("span", { class: "sc-tip-learn" }, "Learn more"), helpA);
+    const body = h("div", { class: "sc-tip-text" });
+    const box = h("div", { class: "sc-tooltip", role: "tooltip",
+      onMouseEnter: clearTipHide, onMouseLeave: scheduleTipHide }, body, foot);
+    document.body.appendChild(box);
+    tipEl.box = box; tipEl.body = body; tipEl.foot = foot; tipEl.help = helpA;
+    return box;
+  }
+
+  function positionTooltip(trigger, box) {
+    const r = trigger.getBoundingClientRect();
+    const bw = box.offsetWidth, bh = box.offsetHeight, gap = 8, m = 6;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let top = r.bottom + gap;                                   // below by default
+    if (top + bh > vh - m && r.top - gap - bh > m) top = r.top - gap - bh;   // flip above
+    top = Math.max(m, Math.min(top, vh - bh - m));
+    let left = r.left + r.width / 2 - bw / 2;                   // centre on the trigger
+    left = Math.max(m, Math.min(left, vw - bw - m));
+    box.style.top = top + "px";
+    box.style.left = left + "px";
+  }
+
+  function showTooltip(trigger) {
+    const text = trigger.getAttribute("data-tip");
+    if (!text) return;
+    clearTipHide();
+    tipTarget = trigger;
+    const box = ensureTooltip();
+    tipEl.body.textContent = text;
+    const anchor = trigger.getAttribute("data-tip-help");
+    if (anchor) { tipEl.help.setAttribute("href", "help.html#" + anchor); tipEl.foot.style.display = ""; }
+    else { tipEl.foot.style.display = "none"; }
+    box.style.display = "block";
+    box.style.visibility = "hidden";       // measure before placing
+    positionTooltip(trigger, box);
+    box.style.visibility = "visible";
+    // next frame → the opacity/transform transition actually runs
+    requestAnimationFrame(() => box.classList.add("sc-tip-on"));
+  }
+
+  function hideTooltip() {
+    clearTipHide();
+    tipTarget = null;
+    if (tipEl.box) { tipEl.box.classList.remove("sc-tip-on"); tipEl.box.style.display = "none"; }
+  }
+
+  function installTooltips() {
+    const trig = (e) => (e.target && e.target.closest) ? e.target.closest("[data-tip]") : null;
+    document.addEventListener("mouseover", (e) => {
+      const t = trig(e); if (!t) return;
+      if (t === tipTarget) { clearTipHide(); return; }
+      showTooltip(t);
+    });
+    document.addEventListener("mouseout", (e) => {
+      const t = trig(e); if (!t) return;
+      const to = e.relatedTarget;
+      if (to && tipEl.box && (to === tipEl.box || tipEl.box.contains(to))) return;  // onto the tooltip
+      if (to && t.contains(to)) return;                                             // still inside trigger
+      scheduleTipHide();
+    });
+    document.addEventListener("focusin", (e) => { const t = trig(e); if (t) showTooltip(t); });
+    document.addEventListener("focusout", (e) => { const t = trig(e); if (t) scheduleTipHide(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTooltip(); });
+    window.addEventListener("scroll", hideTooltip, true);
   }
 
   // ---- time helpers ------------------------------------------------------
@@ -157,8 +242,8 @@
     if (!c) return null;
     const pad = (opts && opts.big) ? "2px 8px" : "0 6px";
     const fs = (opts && opts.big) ? "11px" : "10px";
-    return h("span", { title: "prompt: " + stateName,
-      style: "flex:none;padding:" + pad + ";font-size:" + fs + ";font-weight:600;letter-spacing:0.02em;background:" + c.bg + ";color:" + c.fg }, stateName);
+    return h("span", { "data-tip": "prompt state: " + stateName + " — the hub's read of this node's serial tail", "data-tip-help": "prompt-state",
+      style: "cursor:help;flex:none;padding:" + pad + ";font-size:" + fs + ";font-weight:600;letter-spacing:0.02em;background:" + c.bg + ";color:" + c.fg }, stateName);
   }
 
   // A node is powered BY its target, so "node online" alone doesn't say the
@@ -175,15 +260,15 @@
     const big = opts && opts.big;
     if (!c) {
       if (big) return null;
-      return h("span", { title: "attached machine: unknown (node can't tell / old firmware)",
-        style: "flex:none;width:8px;height:8px;border-radius:50%;border:2px solid #6f6a68;box-sizing:border-box" });
+      return h("span", { "data-tip": "attached machine: unknown — the node can't tell (old firmware or quiet line)", "data-tip-help": "target-liveness",
+        style: "cursor:help;flex:none;width:8px;height:8px;border-radius:50%;border:2px solid #6f6a68;box-sizing:border-box" });
     }
     if (big) {
-      return h("span", { title: "attached machine is " + (target === "up" ? "powered and running" : "off or hung (node still alive)"),
-        style: "flex:none;padding:2px 8px;font-size:11px;font-weight:600;letter-spacing:0.02em;background:" + c.bg + ";color:" + c.fg }, c.label);
+      return h("span", { "data-tip": "attached machine is " + (target === "up" ? "powered and running (USB host enumerated / recent serial output)" : "off or hung — the node is still alive"), "data-tip-help": "target-liveness",
+        style: "cursor:help;flex:none;padding:2px 8px;font-size:11px;font-weight:600;letter-spacing:0.02em;background:" + c.bg + ";color:" + c.fg }, c.label);
     }
-    return h("span", { title: c.label + " — the attached machine",
-      style: "flex:none;width:9px;height:9px;border-radius:50%;background:" + c.dot + (target === "down" ? ";animation:sc-pulse 1.4s infinite" : "") });
+    return h("span", { "data-tip": c.label + " — the attached machine (distinct from the node/Pico link)", "data-tip-help": "target-liveness",
+      style: "cursor:help;flex:none;width:9px;height:9px;border-radius:50%;background:" + c.dot + (target === "down" ? ";animation:sc-pulse 1.4s infinite" : "") });
   }
 
   // ---- serial bridge (phase 8) -------------------------------------------
@@ -400,9 +485,9 @@
     const NAV_TIP = { nodes: "Live node list, serial console and input composer", macros: "Reusable HID sequences replayed on any node",
       runbooks: "YAML expect flows run across a node group", events: "Hub journal and command audit", settings: "Hub configuration, safety toggles, alerts" };
     const links = [["nodes", "Nodes"], ["macros", "Macros"], ["runbooks", "Runbooks"], ["events", "Events"], ["settings", "Settings"]].map(([k, label]) =>
-      h("a", { "aria-current": state.view === k ? "page" : null, title: NAV_TIP[k], onClick: (e) => { e.preventDefault(); switchView(k); } }, label));
+      h("a", { "aria-current": state.view === k ? "page" : null, "data-tip": NAV_TIP[k], onClick: (e) => { e.preventDefault(); switchView(k); } }, label));
     // Help opens the in-app docs in a new tab (not a view switch).
-    links.push(h("a", { href: "help.html", target: "_blank", rel: "noopener", title: "Open the full in-app help & operator docs (new tab)",
+    links.push(h("a", { href: "help.html", target: "_blank", rel: "noopener", "data-tip": "Open the full in-app help & operator docs (new tab)",
       style: "display:inline-flex;align-items:center;gap:5px" }, "Help",
       h("span", { "aria-hidden": "true", style: "display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;font-size:11px;font-weight:600;border:1px solid var(--color-divider);border-radius:50%;color:var(--color-neutral-600)" }, "?")));
     const wsColor = state.ws === "live" ? "#3f9e63" : state.ws === "connecting" ? "#c98a00" : "#c94b39";
@@ -416,11 +501,11 @@
         h("span", { style: "width:12px;height:12px;background:var(--color-accent);display:block" }), "SWARM CONTROL"),
       ...links,
       h("div", { style: "display:flex;align-items:center;gap:var(--space-4);margin-left:auto;flex:none;white-space:nowrap" },
-        showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Show/hide the node list rail", onClick: () => { state.leftOpen = !state.leftOpen; renderView(); } }, state.leftOpen ? "‹ Nodes" : "› Nodes") : null,
-        showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Show/hide the command history & events rail", onClick: () => { state.rightOpen = !state.rightOpen; renderView(); } }, state.rightOpen ? "Activity ›" : "Activity ‹") : null,
+        showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", "data-tip": "Show/hide the node list rail", onClick: () => { state.leftOpen = !state.leftOpen; renderView(); } }, state.leftOpen ? "‹ Nodes" : "› Nodes") : null,
+        showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", "data-tip": "Show/hide the command history & events rail", onClick: () => { state.rightOpen = !state.rightOpen; renderView(); } }, state.rightOpen ? "Activity ›" : "Activity ‹") : null,
         stat("Fleet", state.hub.nodes_online + " / " + state.hub.nodes_total + " online"),
         stat("Hub uptime", uptimeStr(state.hub.uptime_ms)),
-        h("div", { title: "Live update channel to the hub (green live · amber connecting · red offline / demo)", style: "display:flex;align-items:center;gap:7px;border:1px solid var(--color-divider);padding:5px 10px" },
+        h("div", { "data-tip": "Live update channel to the hub (green live · amber connecting · red offline / demo)", style: "display:flex;align-items:center;gap:7px;border:1px solid var(--color-divider);padding:5px 10px" },
           h("span", { style: "width:8px;height:8px;border-radius:50%;display:block;background:" + wsColor }),
           h("span", { style: "font-size:12px;font-weight:600" }, wsLabel))));
   }
@@ -461,15 +546,15 @@
   }
 
   function buildLeftRail() {
-    const filter = h("input", { class: "input", placeholder: "Filter by id, label, group…", title: "Filter the list by node id, label, group or IP (client-side)", value: state.query,
+    const filter = h("input", { class: "input", placeholder: "Filter by id, label, group…", "data-tip": "Filter the list by node id, label, group or IP (client-side)", value: state.query,
       onInput: (e) => { state.query = e.target.value; renderNodeList(); } });
-    const seg = h("div", { class: "seg", style: "align-self:flex-start", title: "Show all nodes, or only online / offline" },
-      ...["all", "online", "offline"].map((f) => h("label", { class: "seg-opt", title: "Show " + f + " nodes" },
+    const seg = h("div", { class: "seg", style: "align-self:flex-start", "data-tip": "Show all nodes, or only online / offline" },
+      ...["all", "online", "offline"].map((f) => h("label", { class: "seg-opt", "data-tip": "Show " + f + " nodes" },
         h("input", { type: "radio", name: "statusf", checked: state.statusFilter === f, onChange: () => { state.statusFilter = f; renderNodeList(); } }), f)));
     ui.nodeList = h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" });
     return h("div", { style: "flex:none;width:304px;display:flex;flex-direction:column;border-right:2px solid var(--color-divider);min-height:0" },
       h("div", { style: "flex:none;padding:var(--space-3);display:flex;flex-direction:column;gap:var(--space-2);border-bottom:2px solid var(--color-divider)" },
-        h("div", { style: "display:flex;align-items:center;gap:6px" }, h("h6", { style: "margin:0" }, "Nodes"), helpLink("nodes", "Nodes & the node list")), filter, seg),
+        h("div", { style: "display:flex;align-items:center;gap:6px" }, h("h6", Object.assign({ style: "margin:0;cursor:help" }, tip("The searchable, filterable list of nodes (Picos). Click a row to open its serial console.", "nodes")), "Nodes")), filter, seg),
       ui.nodeList,
       h("div", { style: "flex:none;padding:var(--space-2) var(--space-3);border-top:2px solid var(--color-divider);font-size:11px;color:var(--color-neutral-600)" },
         "Swarm TCP :" + state.hub.swarm_port + " · Browser :" + state.hub.web_port + " · mgmt VLAN"));
@@ -487,7 +572,7 @@
     ui.nodeList.innerHTML = "";
     for (const n of visible) {
       const on = n.status === "online", isSel = n.id === state.selId;
-      const row = h("div", { class: "sc-row", title: "Select " + n.id + (n.label ? " (" + n.label + ")" : "") + " — " + (on ? "online" : "offline") + "; opens its serial console",
+      const row = h("div", { class: "sc-row", "data-tip": "Select " + n.id + (n.label ? " (" + n.label + ")" : "") + " — " + (on ? "online" : "offline") + "; opens its serial console",
         style: "cursor:pointer;padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--color-divider);border-left:" +
           (isSel ? "3px solid var(--color-accent)" : "3px solid transparent") + ";background:" + (isSel ? "var(--color-surface)" : "transparent") + ";opacity:" + (on ? 1 : 0.55),
         onClick: () => selectNode(n.id) },
@@ -515,12 +600,12 @@
 
     ui.lineCount = h("span", { style: "font-size:11px;color:var(--color-neutral-600)" }, "0 lines buffered");
     const termBar = h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-2);padding:6px var(--space-4);background:var(--color-surface);border-bottom:1px solid var(--color-divider)" },
-      h("h6", { style: "margin:0;font-size:11px" }, "Serial console"), helpLink("console", "The serial console"), ui.lineCount,
+      h("h6", Object.assign({ style: "margin:0;font-size:11px;cursor:help" }, tip("Live serial output from the selected node. xterm.js emulator when vendored, else an append-only log.", "console")), "Serial console"), ui.lineCount,
       h("div", { style: "margin-left:auto;display:flex;gap:var(--space-1)" },
-        (ui.autoBtn = h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Follow the live tail (auto-disables when you scroll up to read back)", onClick: toggleAutoscroll }, state.autoscroll ? "Autoscroll on" : "Autoscroll off")),
-        (ui.wrapBtn = h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Soft-wrap long lines vs. horizontal scroll", onClick: toggleWrap }, state.wrap ? "Wrap on" : "Wrap off")),
-        h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Clear the on-screen buffer for this node only (hub-stored output is untouched)", onClick: clearConsole }, "Clear"),
-        h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Download this node's full stored serial output as a text file", onClick: downloadLog }, "Download log")));
+        (ui.autoBtn = h("button", { class: "btn btn-ghost", style: "font-size:12px", "data-tip": "Follow the live tail (auto-disables when you scroll up to read back)", onClick: toggleAutoscroll }, state.autoscroll ? "Autoscroll on" : "Autoscroll off")),
+        (ui.wrapBtn = h("button", { class: "btn btn-ghost", style: "font-size:12px", "data-tip": "Soft-wrap long lines vs. horizontal scroll", onClick: toggleWrap }, state.wrap ? "Wrap on" : "Wrap off")),
+        h("button", { class: "btn btn-ghost", style: "font-size:12px", "data-tip": "Clear the on-screen buffer for this node only (hub-stored output is untouched)", onClick: clearConsole }, "Clear"),
+        h("button", { class: "btn btn-ghost", style: "font-size:12px", "data-tip": "Download this node's full stored serial output as a text file", onClick: downloadLog }, "Download log")));
 
     ui.term = h("div", { class: "sc-term", style: "flex:1;min-height:0;overflow-y:auto;background:#1b1918;padding:var(--space-3) var(--space-4);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px;line-height:1.6",
       onScroll: (e) => { const el = e.target; const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 24; if (atEnd !== state.autoscroll) { state.autoscroll = atEnd; if (ui.autoBtn) ui.autoBtn.textContent = atEnd ? "Autoscroll on" : "Autoscroll off"; } } });
@@ -561,7 +646,7 @@
       h("div", { style: "display:flex;align-items:baseline;gap:10px;min-width:0" },
         h("h3", { style: "margin:0;font-family:ui-monospace,Menlo,monospace" }, s.id || "—"),
         h("span", { style: "font-size:14px;color:var(--color-neutral-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" }, s.label || ""),
-        h("span", { class: "tag " + (online ? "tag-accent" : "tag-neutral"), title: "node (Pico) link status" }, online ? "online" : "offline"),
+        h("span", { class: "tag " + (online ? "tag-accent" : "tag-neutral"), "data-tip": "node (Pico) link status" }, online ? "online" : "offline"),
         (online ? targetBadge(s.target, { big: true }) : null),
         (online ? promptBadge(s.promptState, { big: true }) : null)),
       h("div", { style: "display:flex;flex-wrap:wrap;gap:2px var(--space-4);font-size:12px;color:var(--color-neutral-700);font-family:ui-monospace,Menlo,monospace;overflow:hidden" },
@@ -573,24 +658,17 @@
           : null))));
     const hasNode = !!s.id;
     host.appendChild(h("div", { style: "flex:none;margin-left:auto;display:flex;align-items:center;gap:var(--space-2);padding:6px var(--space-4);flex-wrap:wrap;justify-content:flex-end" },
-      h("button", { class: "btn btn-secondary", title: "Round-trip the node and refresh its RTT", onClick: doPing }, "Ping"),
-      h("button", { class: "btn btn-secondary", title: "Ask the node to flush its serial receive buffer to the hub", onClick: doRead }, "Read serial"),
-      helpLink("ping-read-reboot", "Ping · Read · Reboot"),
-      h("button", { class: "btn btn-secondary", title: "Build a wait-for-output expect job (login flows, guided steps)", disabled: !hasNode, onClick: () => openExpectBuilder(s.id) }, "Expect"),      // phase 5
-      helpLink("expect", "Expect engine"),
-      h("button", { class: "btn btn-secondary", title: "Stage commands to deliver when this node next connects", disabled: !hasNode, onClick: () => openQueueSheet(s.id) }, "Queue"),         // phase 6
-      helpLink("offline-queue", "Offline command queue"),
-      h("button", { class: "btn btn-secondary", title: "Replay this node's recorded serial session (asciicast)", disabled: !hasNode, onClick: () => openReplay(s.id) }, "Replay"),            // phase 7
-      helpLink("session-recording", "Session recording & replay"),
-      h("button", { class: "btn btn-secondary", title: "Expose this node's raw serial as a TCP port (minicom/PuTTY)", disabled: !hasNode, onClick: () => openBridgeSheet(s.id) }, "Bridge"),       // phase 8
-      helpLink("serial-bridge", "Raw serial bridge"),
-      (nodeHasOta(s) ? h("button", { class: "btn btn-secondary", title: "Push a firmware bundle to this node (chunked, checksummed, auto-revert)", disabled: !hasNode, onClick: () => openOtaSheet(s.id) }, "Firmware") : null),  // phase 12
-      (nodeHasOta(s) ? helpLink("ota", "OTA firmware updates") : null),
-      h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", title: "Reboot the Pico node (NOT the target machine) — drops its socket briefly", onClick: doRebootNode }, "Reboot node"),
-      helpLink("ping-read-reboot", "Reboot node")));
+      h("button", { class: "btn btn-secondary", "data-tip": "Round-trip the node and refresh its RTT", "data-tip-help": "ping-read-reboot", onClick: doPing }, "Ping"),
+      h("button", { class: "btn btn-secondary", "data-tip": "Ask the node to flush its serial receive buffer to the hub", "data-tip-help": "ping-read-reboot", onClick: doRead }, "Read serial"),
+      h("button", { class: "btn btn-secondary", "data-tip": "Build a wait-for-output expect job (login flows, guided steps)", "data-tip-help": "expect", disabled: !hasNode, onClick: () => openExpectBuilder(s.id) }, "Expect"),      // phase 5
+      h("button", { class: "btn btn-secondary", "data-tip": "Stage commands to deliver when this node next connects", "data-tip-help": "offline-queue", disabled: !hasNode, onClick: () => openQueueSheet(s.id) }, "Queue"),         // phase 6
+      h("button", { class: "btn btn-secondary", "data-tip": "Replay this node's recorded serial session (asciicast)", "data-tip-help": "session-recording", disabled: !hasNode, onClick: () => openReplay(s.id) }, "Replay"),            // phase 7
+      h("button", { class: "btn btn-secondary", "data-tip": "Expose this node's raw serial as a TCP port (minicom/PuTTY)", "data-tip-help": "serial-bridge", disabled: !hasNode, onClick: () => openBridgeSheet(s.id) }, "Bridge"),       // phase 8
+      (nodeHasOta(s) ? h("button", { class: "btn btn-secondary", "data-tip": "Push a firmware bundle to this node (chunked, checksummed, auto-revert)", "data-tip-help": "ota", disabled: !hasNode, onClick: () => openOtaSheet(s.id) }, "Firmware") : null),  // phase 12
+      h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", "data-tip": "Reboot the Pico node (NOT the target machine) — drops its socket briefly", "data-tip-help": "ping-read-reboot", onClick: doRebootNode }, "Reboot node")));
   }
 
-  const kicker = (t) => h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);width:52px;flex:none" }, t);
+  const kicker = (t, tipText, anchor) => h("span", Object.assign({ style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);width:52px;flex:none" + (tipText ? ";cursor:help" : "") }, tip(tipText, anchor)), t);
 
   // The composer's shape depends on the selected node's input mode. HID mode is
   // the original keystroke composer, unchanged. Serial mode captures keystrokes
@@ -613,7 +691,7 @@
       flushSerial();               // don't leave buffered keystrokes on a mode flip
       renderComposer();
     };
-    const opt = (m, label, allowed, tip) => h("label", { class: "seg-opt", title: tip || "",
+    const opt = (m, label, allowed, tip) => h("label", { class: "seg-opt", "data-tip": tip || "",
       style: allowed ? "" : "opacity:0.45;cursor:not-allowed" },
       h("input", { type: "radio", name: "inputmode", checked: mode === m, disabled: !allowed, onChange: () => pick(m) }), label);
     const seg = h("div", { class: "seg", style: "align-self:flex-start" },
@@ -628,33 +706,33 @@
         : (wantsSerial && !serialOk
             ? "Serial unavailable — firmware lacks serial_tx; using HID"
             : "HID keystrokes → keyboard console (tty1 / BIOS / GRUB)"));
-    return h("div", { style: "display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap" }, kicker("Input"), seg, helpLink("input-modes", "Input modes: HID vs Serial"), note);
+    return h("div", { style: "display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap" }, kicker("Input", "HID types USB keystrokes at tty1/BIOS/GRUB; Serial streams bytes into the target's serial getty. Distinct sessions.", "input-modes"), seg, note);
   }
 
   function buildHidComposer(disabled) {
     ui.composerInput = h("input", { class: "input", style: "flex:1;font-family:ui-monospace,Menlo,monospace", value: state.input, disabled,
-      title: "HID mode: types this text as USB keystrokes onto the target's keyboard console (tty1 / BIOS / GRUB). Enter to send.",
+      "data-tip": "HID mode: types this text as USB keystrokes onto the target's keyboard console (tty1 / BIOS / GRUB). Enter to send.",
       placeholder: disabled ? "node offline — commands will fail" : "type into " + (state.selId || "node") + " serial…",
       onInput: (e) => { state.input = e.target.value; }, onKeyDown: (e) => { if (e.key === "Enter" && state.input.trim()) sendText(); } });
     const KEY_TIP = { "Enter": "Press Enter", "Tab": "Press Tab (completion)", "ESC": "Press Escape", "↑": "Up arrow", "↓": "Down arrow", "DEL": "Delete", "F2": "F2 (often BIOS setup)", "F12": "F12 (often boot menu)" };
     const keys = ["Enter", "Tab", "ESC", "↑", "↓", "DEL", "F2", "F12"].map((k) =>
-      h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", title: (KEY_TIP[k] || k) + " — sent as an HID key", disabled, onClick: () => sendKey(k) }, k));
+      h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", "data-tip": (KEY_TIP[k] || k) + " — sent as an HID key", disabled, onClick: () => sendKey(k) }, k));
     const CHORD_TIP = { "CTRL+C": "Interrupt (SIGINT) on tty1", "CTRL+D": "EOF / logout on tty1", "CTRL+ALT+DEL": "⚠ Reboots the target machine (confirm prompt when enabled)",
       "CTRL+ALT+F2": "Switch to virtual terminal 2", "ALT+SysRq+B": "⚠ Immediate SysRq reboot — no clean shutdown" };
     const chords = [["CTRL+C", "inherit"], ["CTRL+D", "inherit"], ["CTRL+ALT+DEL", "var(--color-accent-700)"], ["CTRL+ALT+F2", "inherit"], ["ALT+SysRq+B", "var(--color-accent-700)"]]
-      .map(([label, color]) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px;color:" + color, title: CHORD_TIP[label] || label, disabled, onClick: () => sendChord(label) }, label));
-    const macros = state.macros.slice(0, 4).map((m) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", title: "Run macro “" + m.name + "” on " + (state.selId || "this node"), disabled, onClick: () => runMacroOn(m.id, state.selId) }, m.name));
+      .map(([label, color]) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px;color:" + color, "data-tip": CHORD_TIP[label] || label, disabled, onClick: () => sendChord(label) }, label));
+    const macros = state.macros.slice(0, 4).map((m) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", "data-tip": "Run macro “" + m.name + "” on " + (state.selId || "this node"), disabled, onClick: () => runMacroOn(m.id, state.selId) }, m.name));
     return [
       h("div", { style: "display:flex;gap:var(--space-2)" }, ui.composerInput,
-        h("button", { class: "btn btn-primary", title: "Type the text above onto the target as HID keystrokes", disabled, onClick: sendText }, "Send")),
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Keys"), helpLink("control-bytes", "Keys & chords"), ...keys,
-        h("label", { title: "Append a newline after the typed text (i.e. press Enter)", style: "margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--color-neutral-700)" },
+        h("button", { class: "btn btn-primary", "data-tip": "Type the text above onto the target as HID keystrokes", disabled, onClick: sendText }, "Send")),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Keys", "Single HID keys (Enter, Tab, ESC, arrows, DEL, function keys) sent to the target's keyboard console.", "control-bytes"), ...keys,
+        h("label", { "data-tip": "Append a newline after the typed text (i.e. press Enter)", style: "margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--color-neutral-700)" },
           h("input", { type: "checkbox", checked: state.sendNewline, style: "accent-color:var(--color-accent)", onChange: (e) => { state.sendNewline = e.target.checked; } }), "append ⏎"),
-        h("label", { title: "Per-character delay in ms — raise it for a target that drops fast keystrokes", style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, "char delay",
-          h("input", { class: "input", type: "number", min: "0", step: "5", value: state.charDelay, title: "Per-character HID delay (ms)", style: "width:64px;min-height:28px;padding:2px 6px",
+        h("label", { "data-tip": "Per-character delay in ms — raise it for a target that drops fast keystrokes", style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, "char delay",
+          h("input", { class: "input", type: "number", min: "0", step: "5", value: state.charDelay, "data-tip": "Per-character HID delay (ms)", style: "width:64px;min-height:28px;padding:2px 6px",
             onChange: (e) => { state.charDelay = Number(e.target.value) || 0; } }), "ms")),
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Chords"), helpLink("control-bytes", "Control keys & chords"), ...chords),
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Macros"), helpLink("macros", "Macros"), ...macros),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Chords", "HID key combos. CTRL+ALT+DEL and ALT+SysRq+B reset the target machine (confirm prompt when enabled).", "control-bytes"), ...chords),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Macros", "Quick-run the first few stored macros on this node without leaving the console.", "macros"), ...macros),
     ];
   }
 
@@ -663,10 +741,10 @@
     // the getty (no local echo — the getty echoes back through `output`). The
     // field itself stays empty.
     ui.composerInput = h("input", { class: "input", style: "flex:1;font-family:ui-monospace,Menlo,monospace", value: "", disabled,
-      title: "Serial mode: keystrokes stream straight into the target's serial getty. No local echo — the getty echoes back in the console.",
+      "data-tip": "Serial mode: keystrokes stream straight into the target's serial getty. No local echo — the getty echoes back in the console.",
       placeholder: disabled ? "node offline — serial disabled" : "serial: keystrokes stream live to " + (state.selId || "node") + " (no local echo)",
       onKeyDown: serialKeydown, onPaste: serialPaste });
-    const ctl = (label, fn, color, tip) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px" + (color ? ";color:" + color : ""), title: tip || label, disabled, onClick: fn }, label);
+    const ctl = (label, fn, color, tip) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px" + (color ? ";color:" + color : ""), "data-tip": tip || label, disabled, onClick: fn }, label);
     const controls = [
       ctl("⏎ Enter", () => serialEnter(), null, "Send a carriage return (0d) — the getty expects CR"),
       ctl("⌫ Bksp", () => serialSendRaw("7f"), null, "Backspace / delete (raw 7f)"),
@@ -678,19 +756,19 @@
     ];
     return [
       h("div", { style: "display:flex;gap:var(--space-2)" }, ui.composerInput,
-        h("button", { class: "btn btn-primary", title: "Send a carriage return (0d) to the serial getty", disabled, onClick: () => serialEnter() }, "Enter")),
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Serial"), helpLink("control-bytes", "Serial control bytes"), ...controls),
+        h("button", { class: "btn btn-primary", "data-tip": "Send a carriage return (0d) to the serial getty", disabled, onClick: () => serialEnter() }, "Enter")),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Serial", "Raw serial control bytes (Enter 0d, Bksp 7f, Tab 09, Esc 1b, Ctrl-C 03, Ctrl-D 04, Ctrl-Z 1a).", "control-bytes"), ...controls),
     ];
   }
 
   function buildRightRail() {
     const seg = h("div", { class: "seg", style: "margin:var(--space-3) 0 var(--space-3) var(--space-3);align-self:flex-start" },
-      h("label", { class: "seg-opt", title: "Every command sent to a node and its outcome" }, h("input", { type: "radio", name: "railtab", checked: state.tab === "history", onChange: () => { state.tab = "history"; renderRail(); } }), "Command history"),
-      h("label", { class: "seg-opt", title: "Live hub events — registrations, heartbeats, failures" }, h("input", { type: "radio", name: "railtab", checked: state.tab === "events", onChange: () => { state.tab = "events"; renderRail(); } }), "Events"));
+      h("label", { class: "seg-opt", "data-tip": "Every command sent to a node and its outcome" }, h("input", { type: "radio", name: "railtab", checked: state.tab === "history", onChange: () => { state.tab = "history"; renderRail(); } }), "Command history"),
+      h("label", { class: "seg-opt", "data-tip": "Live hub events — registrations, heartbeats, failures" }, h("input", { type: "radio", name: "railtab", checked: state.tab === "events", onChange: () => { state.tab = "events"; renderRail(); } }), "Events"));
     ui.rail = h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0;border-top:2px solid var(--color-divider)" });
     setTimeout(renderRail, 0);
     return h("div", { style: "flex:none;width:324px;display:flex;flex-direction:column;border-left:2px solid var(--color-divider);min-height:0" },
-      h("div", { style: "display:flex;align-items:center;gap:8px" }, seg, helpLink("events", "Events & command audit")), ui.rail);
+      withTip(h("div", { style: "display:flex;align-items:center;gap:8px;cursor:help" }, seg), "Command history and the live hub event feed for this node and the fleet.", "events"), ui.rail);
   }
 
   function renderRail() {
@@ -706,7 +784,7 @@
           h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:3px" },
             h("span", { style: "font-size:11px;color:var(--color-neutral-600);font-family:ui-monospace,Menlo,monospace" }, c.id + " · " + c.nodeId),
             h("span", { style: "font-size:11px;color:var(--color-neutral-600)" }, rel(c.ts)),
-            h("button", { class: "btn btn-ghost", style: "margin-left:auto;font-size:11px;padding:1px 4px", title: "Re-send this command to " + c.nodeId, onClick: () => { selectNode(c.nodeId); sendRaw(c.text, "text"); } }, "Re-run"))));
+            h("button", { class: "btn btn-ghost", style: "margin-left:auto;font-size:11px;padding:1px 4px", "data-tip": "Re-send this command to " + c.nodeId, onClick: () => { selectNode(c.nodeId); sendRaw(c.text, "text"); } }, "Re-run"))));
       }
       if (!state.history.length) ui.rail.appendChild(empty("No commands yet."));
     } else {
@@ -744,13 +822,13 @@
         h("td", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px" }, (m.steps || []).length + " steps"),
         h("td", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px" }, (m.runs || 0) + " runs"),
         h("td", { style: "font-size:12px;color:var(--color-neutral-700)" }, m.lastRun ? rel(m.lastRun) : "—"),
-        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", title: "Run “" + m.name + "” on the selected node (" + (state.selId || "none") + ")", onClick: (e) => { e.stopPropagation(); runMacroOn(m.id, state.selId); } }, "Run"))));
+        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", "data-tip": "Run “" + m.name + "” on the selected node (" + (state.selId || "none") + ")", onClick: (e) => { e.stopPropagation(); runMacroOn(m.id, state.selId); } }, "Run"))));
     }
     const left = h("div", { style: "flex:1 1 auto;min-width:0;display:flex;flex-direction:column;min-height:0;border-right:2px solid var(--color-divider)" },
       h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider)" },
-        h("h4", { style: "margin:0" }, "Macros"), helpLink("macros", "Macros"),
+        h("h4", Object.assign({ style: "margin:0;cursor:help" }, tip("Named, reusable HID/serial sequences stored on the hub and replayed on any node in one click.", "macros")), "Macros"),
         h("span", { style: "font-size:12px;color:var(--color-neutral-600)" }, "stored on the hub · replayed as HID + serial steps"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", title: "Create a new reusable macro", onClick: () => openMacroEditor(null) }, "New macro")),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", "data-tip": "Create a new reusable macro", onClick: () => openMacroEditor(null) }, "New macro")),
       state.macros.length
         ? h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
             h("table", { class: "table", style: "width:100%" },
@@ -776,9 +854,9 @@
         h("span", { class: "tag tag-outline", style: "padding:1px 7px;margin-top:6px;display:inline-block" }, m ? (m.group || "—") : "—")),
       stepList,
       h("div", { style: "flex:none;padding:var(--space-3) var(--space-4);border-top:2px solid var(--color-divider);display:flex;gap:var(--space-2)" },
-        h("button", { class: "btn btn-secondary", disabled: !m, title: "Edit this macro's steps", onClick: () => m && openMacroEditor(m) }, "Edit"),
-        h("button", { class: "btn btn-ghost", disabled: !m, style: "color:var(--color-accent)", title: "Delete this macro (confirms first)", onClick: () => m && deleteMacroById(m.id, m.name) }, "Delete"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !m || !state.selId, title: "Replay this macro on the selected node", onClick: () => m && runMacroOn(m.id, state.selId) }, "Run on " + (state.selId || "—"))));
+        h("button", { class: "btn btn-secondary", disabled: !m, "data-tip": "Edit this macro's steps", onClick: () => m && openMacroEditor(m) }, "Edit"),
+        h("button", { class: "btn btn-ghost", disabled: !m, style: "color:var(--color-accent)", "data-tip": "Delete this macro (confirms first)", onClick: () => m && deleteMacroById(m.id, m.name) }, "Delete"),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !m || !state.selId, "data-tip": "Replay this macro on the selected node", onClick: () => m && runMacroOn(m.id, state.selId) }, "Run on " + (state.selId || "—"))));
     return h("div", { style: "flex:1;display:flex;min-height:0" }, left, right);
   }
 
@@ -841,9 +919,9 @@
           h("span", { style: "font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600);width:20px;flex:none" }, String(i + 1).padStart(2, "0")),
           h("span", { style: "font-family:ui-monospace,monospace;font-size:12px;font-weight:600;width:46px;flex:none;color:" + (d.op === "KEY" ? "var(--color-accent-700)" : "var(--color-neutral-700)") }, d.op),
           h("span", { style: "font-family:ui-monospace,monospace;font-size:12px;min-width:0;flex:1;word-break:break-all" }, d.arg),
-          h("button", { class: "btn btn-ghost", style: "padding:0 6px", title: "Move up", onClick: () => swap(-1) }, "↑"),
-          h("button", { class: "btn btn-ghost", style: "padding:0 6px", title: "Move down", onClick: () => swap(1) }, "↓"),
-          h("button", { class: "btn btn-ghost", style: "padding:0 6px;color:var(--color-accent)", title: "Remove", onClick: () => { draft.steps.splice(i, 1); renderSteps(); } }, "×")));
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px", "data-tip": "Move up", onClick: () => swap(-1) }, "↑"),
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px", "data-tip": "Move down", onClick: () => swap(1) }, "↓"),
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px;color:var(--color-accent)", "data-tip": "Remove", onClick: () => { draft.steps.splice(i, 1); renderSteps(); } }, "×")));
       });
     }
 
@@ -908,7 +986,7 @@
       h("div", { class: "dialog-actions" },
         (draft.id != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: () => { const nm = draft.name; closeMacroEditor(); deleteMacroById(draft.id, nm); } }, "Delete") : null),
         h("button", { class: "btn btn-secondary", onClick: closeMacroEditor }, "Cancel"),
-        h("button", { class: "btn btn-primary", title: "Save this macro on the hub", onClick: save }, draft.id == null ? "Create macro" : "Save changes")));
+        h("button", { class: "btn btn-primary", "data-tip": "Save this macro on the hub", onClick: save }, draft.id == null ? "Create macro" : "Save changes")));
 
     const backdrop = h("div", { id: "macro-editor", class: "dialog-backdrop", style: "z-index:120", onClick: closeMacroEditor }, card);
     document.body.appendChild(backdrop);
@@ -943,9 +1021,9 @@
     const head = (cols) => h("thead", {}, h("tr", {}, ...cols.map((t) => h("th", {}, t))));
     return h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
       h("div", { style: "padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;gap:var(--space-3)" },
-        h("div", {}, h("div", { style: "display:flex;align-items:center;gap:8px" }, h("h4", { style: "margin:0" }, "Events"), helpLink("events", "Events & audit")),
+        h("div", {}, h("div", { style: "display:flex;align-items:center;gap:8px" }, h("h4", Object.assign({ style: "margin:0;cursor:help" }, tip("The hub journal plus a command audit of every command sent, its target, and its outcome.", "events")), "Events")),
           h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "hub journal — registrations, heartbeats, stale sweeps and failures")),
-        h("a", { class: "btn btn-secondary", style: "margin-left:auto;flex:none", title: "Download the full event log as CSV", href: "/api/events/export", target: "_blank" }, "Export CSV")),
+        h("a", { class: "btn btn-secondary", style: "margin-left:auto;flex:none", "data-tip": "Download the full event log as CSV", href: "/api/events/export", target: "_blank" }, "Export CSV")),
       h("table", { class: "table", style: "width:100%" }, head(["Time", "Age", "Type", "Node", "Detail"]), evRows),
       h("div", { style: "padding:var(--space-3) var(--space-4);border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider)" },
         h("h4", { style: "margin:0" }, "Command audit"),
@@ -981,7 +1059,7 @@
     ];
     const toggleWrap = h("div", { style: "padding:var(--space-3) var(--space-4)" },
       h("div", { style: "display:flex;align-items:center;gap:6px;margin-bottom:var(--space-2)" },
-        h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600)" }, "Safety"), helpLink("settings", "Safety toggles")));
+        withTip(h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);cursor:help" }, "Safety"), "Safety toggles: confirm destructive keys, serial-bridge listeners, and alerts.", "settings")));
     for (const [key, label, hint] of toggles) {
       toggleWrap.appendChild(h("label", { style: "display:flex;gap:12px;align-items:flex-start;padding:var(--space-2) 0;border-bottom:1px solid var(--color-divider);cursor:pointer" },
         h("input", { type: "checkbox", checked: !!s[key], style: "accent-color:var(--color-accent);margin-top:3px;flex:none", onChange: (e) => { edited[key] = e.target.checked; } }),
@@ -994,7 +1072,7 @@
     edited.alerts_ntfy_url = s.alerts_ntfy_url || "";
     const alertsBlock = h("div", { style: "padding:var(--space-3) var(--space-4);border-top:1px solid var(--color-divider)" },
       h("div", { style: "display:flex;align-items:center;gap:6px;margin-bottom:var(--space-2)" },
-        h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600)" }, "Alert endpoints"), helpLink("alerts", "Alerts")),
+        withTip(h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);cursor:help" }, "Alert endpoints"), "Outbound notifications on node-down / panic / failed commands via webhook (JSON) or ntfy topic.", "alerts")),
       h("div", { class: "field", style: "margin-bottom:var(--space-3)" },
         h("label", {}, "Webhook URL (POST JSON)"),
         h("input", { class: "input", type: "text", value: edited.alerts_webhook_url, placeholder: "https://…", onInput: (e) => { edited.alerts_webhook_url = e.target.value; } })),
@@ -1003,9 +1081,9 @@
         h("input", { class: "input", type: "text", value: edited.alerts_ntfy_url, placeholder: "https://ntfy.sh/your-topic", onInput: (e) => { edited.alerts_ntfy_url = e.target.value; } })));
     return h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
       h("div", { style: "padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;gap:var(--space-3)" },
-        h("div", { style: "min-width:0" }, h("div", { style: "display:flex;align-items:center;gap:8px" }, h("h4", { style: "margin:0" }, "Settings"), helpLink("settings", "Settings")),
+        h("div", { style: "min-width:0" }, h("div", { style: "display:flex;align-items:center;gap:8px" }, h("h4", Object.assign({ style: "margin:0;cursor:help" }, tip("Hub configuration — live values apply immediately; port changes need a restart.", "settings")), "Settings")),
           h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "hub configuration — live values apply immediately; port changes need a restart")),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", title: "Write the changed settings to the hub (PATCH /api/settings)", onClick: () => saveSettings(edited) }, "Save config")),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", "data-tip": "Write the changed settings to the hub (PATCH /api/settings)", onClick: () => saveSettings(edited) }, "Save config")),
       grid, toggleWrap, alertsBlock);
   }
 
@@ -1297,7 +1375,7 @@
     const delMs = h("input", { class: "input", type: "number", min: "0", step: "100", value: "500", style: "width:96px" });
 
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
-      h("div", { style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, h("span", {}, "Ordered steps run on "), h("b", {}, nodeId), h("span", {}, " — actions alternate with wait-for matches on the node's live output."), helpLink("expect", "Expect engine")),
+      h("div", Object.assign({ style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700);cursor:help" }, tip("Expect alternates action steps with wait-for regex matches on the node's live serial output. One running job per node.", "expect")), h("span", {}, "Ordered steps run on "), h("b", {}, nodeId), h("span", {}, " — actions alternate with wait-for matches on the node's live output.")),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Steps"), listHost),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
         kicker("Send"), sendTxt, h("button", { class: "btn btn-secondary", onClick: addSend }, "Add send")),
@@ -1320,7 +1398,7 @@
     }
     openSheet("expect-sheet", "Expect — " + nodeId, body,
       [h("button", { class: "btn btn-secondary", onClick: () => closeSheet("expect-sheet") }, "Cancel"),
-       h("button", { class: "btn btn-primary", title: "Start the expect job on " + nodeId + " (one running job per node)", onClick: run }, "Run expect")]);
+       h("button", { class: "btn btn-primary", "data-tip": "Start the expect job on " + nodeId + " (one running job per node)", onClick: run }, "Run expect")]);
     renderList();
   }
   function runExpectDemo(nodeId, steps) {
@@ -1372,11 +1450,11 @@
     }
     const online = (sel() || {}).status === "online";
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
-      h("div", { style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, h("span", {}, online ? "Node is online — queued commands drain immediately on submit." : "Node is offline — commands are held and delivered when it reconnects."), helpLink("offline-queue", "Offline command queue")),
+      h("div", Object.assign({ style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700);cursor:help" }, tip("Stage commands to deliver the instant a node next connects (e.g. press ENTER at GRUB). Durable, with an optional TTL.", "offline-queue")), h("span", {}, online ? "Node is online — queued commands drain immediately on submit." : "Node is offline — commands are held and delivered when it reconnects.")),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Pending"), listHost),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
-        kicker("Add"), cmdTxt, h("label", { title: "Time-to-live in minutes (0 = never expires)", style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:5px" }, "ttl", ttlMin, "min"),
-        h("button", { class: "btn btn-secondary", title: "Enqueue this command for delivery on connect", onClick: add }, "Queue")));
+        kicker("Add"), cmdTxt, h("label", { "data-tip": "Time-to-live in minutes (0 = never expires)", style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:5px" }, "ttl", ttlMin, "min"),
+        h("button", { class: "btn btn-secondary", "data-tip": "Enqueue this command for delivery on connect", onClick: add }, "Queue")));
     openSheet("queue-sheet", "Offline queue — " + nodeId, body,
       [h("button", { class: "btn btn-primary", onClick: () => closeSheet("queue-sheet") }, "Done")], 600);
     refreshList();
@@ -1435,11 +1513,11 @@
       catch (e) { toast("Failed", "bridge remove error"); }
     }
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
-      h("div", { style: "display:flex;align-items:center;gap:6px" }, info, helpLink("serial-bridge", "Raw serial bridge")),
+      withTip(h("div", { style: "display:flex;align-items:center;gap:6px;cursor:help" }, info), "Expose this node's raw serial as an unauthenticated TCP socket (minicom/PuTTY). Off by default, opt-in per node — keep ports inside the segment.", "serial-bridge"),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" }, kicker("Port"), portInput,
-        h("button", { class: "btn btn-secondary", title: "Expose this node's raw serial on the chosen TCP port (1024-65535)", onClick: assign }, cur != null ? "Reassign" : "Assign")));
+        h("button", { class: "btn btn-secondary", "data-tip": "Expose this node's raw serial on the chosen TCP port (1024-65535)", onClick: assign }, cur != null ? "Reassign" : "Assign")));
     openSheet("bridge-sheet", "Serial bridge — " + nodeId, body,
-      [cur != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", title: "Remove this node's bridge port assignment", onClick: unassign }, "Unassign") : null,
+      [cur != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", "data-tip": "Remove this node's bridge port assignment", onClick: unassign }, "Unassign") : null,
        h("button", { class: "btn btn-primary", onClick: () => closeSheet("bridge-sheet") }, "Done")], 560);
   }
 
@@ -1526,7 +1604,7 @@
     let picked = null;
     const listHost = h("div", { class: "sc-scroll", style: "max-height:200px;overflow-y:auto;border:1px solid var(--color-divider)" });
     const progressHost = h("div", {});
-    const updateBtn = h("button", { class: "btn btn-primary", title: "Flash the selected bundle to " + nodeId + " — it reboots and must report healthy to confirm", onClick: () => run() }, "Update firmware");
+    const updateBtn = h("button", { class: "btn btn-primary", "data-tip": "Flash the selected bundle to " + nodeId + " — it reboots and must report healthy to confirm", onClick: () => run() }, "Update firmware");
 
     function renderProgress() {
       progressHost.innerHTML = "";
@@ -1565,13 +1643,13 @@
     }
 
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
-      h("div", { style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, h("span", {}, "Push a firmware bundle to "), h("b", {}, nodeId),
-        h("span", {}, ". The Pico flashes, reboots and must report "), h("b", {}, "healthy"), h("span", {}, " to confirm; a canary rollout can update a whole group."), helpLink("ota", "OTA firmware updates")),
+      h("div", Object.assign({ style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700);cursor:help" }, tip("Chunked, checksummed firmware push with crash-loop auto-revert. The Pico flashes, reboots, and must report healthy to confirm.", "ota")), h("span", {}, "Push a firmware bundle to "), h("b", {}, nodeId),
+        h("span", {}, ". The Pico flashes, reboots and must report "), h("b", {}, "healthy"), h("span", {}, " to confirm; a canary rollout can update a whole group.")),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Bundle"), listHost),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Progress"), progressHost));
 
     openSheet("ota-sheet", "Update firmware — " + nodeId, body,
-      [h("button", { class: "btn btn-ghost", style: "margin-right:auto", title: "Create, view and roll out firmware bundles", onClick: () => openBundleManager() }, "Manage bundles…"),
+      [h("button", { class: "btn btn-ghost", style: "margin-right:auto", "data-tip": "Create, view and roll out firmware bundles", onClick: () => openBundleManager() }, "Manage bundles…"),
        h("button", { class: "btn btn-secondary", onClick: () => closeOtaSheet() }, "Close"),
        updateBtn]);
     // Wire the backdrop close (openSheet's own onClick) to also drop the hook.
@@ -1690,14 +1768,14 @@
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
         kicker("New"), nameInput),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
-        kicker("Files"), fileInput, h("button", { class: "btn btn-secondary", title: "Read the chosen files in-browser and store them as a firmware bundle", onClick: create }, "Create bundle")),
+        kicker("Files"), fileInput, h("button", { class: "btn btn-secondary", "data-tip": "Read the chosen files in-browser and store them as a firmware bundle", onClick: create }, "Create bundle")),
       h("div", { style: "font-size:11px;color:var(--color-neutral-600);line-height:1.5" }, "Files are read in the browser and base64-encoded into the bundle manifest on the hub."),
       h("div", { style: "border-top:1px solid var(--color-divider)" }),
       h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, h("b", {}, "Canary rollout"), " — updates one node, waits for it to come back ", h("b", {}, "healthy"), ", then staggers the rest. Follow each node's progress bar in its console."),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Bundle"), rollBundleHost),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Target"), targetSeg, targetHost),
       h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:6px" }, "stagger", stagger, "ms between nodes"),
-      h("div", { style: "display:flex;align-items:center;gap:8px;justify-content:flex-end" }, helpLink("ota", "Canary rollout"), h("button", { class: "btn btn-primary", title: "Canary rollout: update one node, wait for healthy, then stagger the rest", onClick: rollout }, "Start rollout")));
+      h("div", { style: "display:flex;align-items:center;gap:8px;justify-content:flex-end" }, h("button", { class: "btn btn-primary", "data-tip": "Canary rollout: update one node, wait for healthy, then stagger the rest", "data-tip-help": "ota", onClick: rollout }, "Start rollout")));
 
     openSheet("bundle-manager", "Firmware bundles", body,
       [h("button", { class: "btn btn-primary", onClick: () => closeSheet("bundle-manager") }, "Done")], 720);
@@ -1750,13 +1828,13 @@
         onClick: () => { state.selRunbook = rb.id; renderView(); } },
         h("td", { style: "font-weight:600" }, rb.name),
         h("td", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px" }, (rb.yaml || "").split("\n").filter((l) => /^\s*-/.test(l)).length + " steps"),
-        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", title: "Run “" + rb.name + "” across chosen nodes or a group", onClick: (e) => { e.stopPropagation(); openRunbookRun(rb); } }, "Run"))));
+        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", "data-tip": "Run “" + rb.name + "” across chosen nodes or a group", onClick: (e) => { e.stopPropagation(); openRunbookRun(rb); } }, "Run"))));
     }
     const left = h("div", { style: "flex:1 1 auto;min-width:0;display:flex;flex-direction:column;min-height:0;border-right:2px solid var(--color-divider)" },
       h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider)" },
-        h("h4", { style: "margin:0" }, "Runbooks"), helpLink("runbooks", "Runbooks"),
+        h("h4", Object.assign({ style: "margin:0;cursor:help" }, tip("Named YAML expect flows run across a whole node group, with per-node staggering and live progress.", "runbooks")), "Runbooks"),
         h("span", { style: "font-size:12px;color:var(--color-neutral-600)" }, "YAML expect flows, run across nodes or a group"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", title: "Create a new YAML runbook", onClick: () => openRunbookEditor(null) }, "New runbook")),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", "data-tip": "Create a new YAML runbook", onClick: () => openRunbookEditor(null) }, "New runbook")),
       state.runbooks.length
         ? h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
             h("table", { class: "table", style: "width:100%" },
@@ -1793,9 +1871,9 @@
         h("h5", { style: "margin:2px 0 0" }, "Live progress")),
       runsHost,
       h("div", { style: "flex:none;padding:var(--space-3) var(--space-4);border-top:2px solid var(--color-divider);display:flex;gap:var(--space-2)" },
-        h("button", { class: "btn btn-secondary", disabled: !rb, title: "Edit this runbook's YAML", onClick: () => rb && openRunbookEditor(rb) }, "Edit"),
-        h("button", { class: "btn btn-ghost", disabled: !rb, style: "color:var(--color-accent)", title: "Delete this runbook (confirms first)", onClick: () => rb && deleteRunbook(rb) }, "Delete"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !rb, title: "Run this runbook across nodes or a group", onClick: () => rb && openRunbookRun(rb) }, "Run")));
+        h("button", { class: "btn btn-secondary", disabled: !rb, "data-tip": "Edit this runbook's YAML", onClick: () => rb && openRunbookEditor(rb) }, "Edit"),
+        h("button", { class: "btn btn-ghost", disabled: !rb, style: "color:var(--color-accent)", "data-tip": "Delete this runbook (confirms first)", onClick: () => rb && deleteRunbook(rb) }, "Delete"),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !rb, "data-tip": "Run this runbook across nodes or a group", onClick: () => rb && openRunbookRun(rb) }, "Run")));
     return h("div", { style: "flex:1;display:flex;min-height:0" }, left, right);
   }
   function openRunbookEditor(existing) {
@@ -1819,7 +1897,7 @@
     openSheet("runbook-editor", draft.id == null ? "New runbook" : "Edit runbook", body,
       [draft.id != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: () => { const r = selRunbookById(draft.id); closeSheet("runbook-editor"); if (r) deleteRunbook(r); } }, "Delete") : null,
        h("button", { class: "btn btn-secondary", onClick: () => closeSheet("runbook-editor") }, "Cancel"),
-       h("button", { class: "btn btn-primary", title: "Validate the YAML and save this runbook", onClick: save }, draft.id == null ? "Create" : "Save")], 720);
+       h("button", { class: "btn btn-primary", "data-tip": "Validate the YAML and save this runbook", onClick: save }, draft.id == null ? "Create" : "Save")], 720);
   }
   const selRunbookById = (id) => state.runbooks.find((r) => r.id === id) || null;
   function deleteRunbook(rb) {
@@ -1860,7 +1938,7 @@
       h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:6px" }, "stagger", stagger, "ms between nodes"));
     openSheet("runbook-run", "Run runbook — " + rb.name, body,
       [h("button", { class: "btn btn-secondary", onClick: () => closeSheet("runbook-run") }, "Cancel"),
-       h("button", { class: "btn btn-primary", title: "Start this runbook on the selected targets (up to 128 nodes)", onClick: run }, "Run")], 620);
+       h("button", { class: "btn btn-primary", "data-tip": "Start this runbook on the selected targets (up to 128 nodes)", onClick: run }, "Run")], 620);
     renderTargets();
   }
   function runRunbookDemo(rb, body) {
@@ -2117,6 +2195,7 @@
       console.warn("hub unreachable, entering demo mode:", e);
       await loadDemo();
     }
+    installTooltips();   // one delegated listener drives the custom tooltip singleton
     renderShell();
     if (!state.demo && state.selId) backfillNode(state.selId);
     // Keep the xterm terminal sized to its container (phase 3; no-op without xterm).

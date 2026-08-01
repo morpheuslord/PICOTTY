@@ -175,3 +175,66 @@ Files touched: `app.js`, `index.html` (unchanged — help is reachable directly 
   Run/Edit/Delete/New/Save; Events Export CSV; Settings Save; and the sheet
   primary actions (Run expect, Queue, Assign/Reassign/Unassign bridge, Update
   firmware, Create bundle, Start rollout, Run runbook).
+
+## Phase 13 — Custom tooltip system (redesign)
+
+Replaces BOTH the native `title=""` box and the standalone circular "?" `helpLink`
+icon with one polished, custom-styled hover tooltip. The docs "?" now lives
+**inside** the tooltip box, not as a separate icon beside each control.
+
+### `app.js` — the singleton + delegation
+- Removed `helpLink(anchor, label, opts)` entirely (all 26 call sites migrated).
+- New `tip(text, anchor)` returns an attrs fragment
+  `{ "data-tip": text, "data-tip-help": anchor }` to spread into `h(tag, {…})`;
+  `withTip(node, text, anchor)` stamps the dataset onto an existing node.
+  `kicker(label, tipText?, anchor?)` gained optional tooltip args.
+- A single `<div class="sc-tooltip">` is appended to `<body>` (built with `h()` /
+  `textContent`, never innerHTML). It holds a `.sc-tip-text` body and a
+  `.sc-tip-foot` footer with a "Learn more" label + a circular accent **"?"**
+  `<a href="help.html#<anchor>" target="_blank" rel="noopener">` — the docs link,
+  now *inside* the box.
+- `installTooltips()` (called once in `boot`) wires **delegated** listeners on
+  `document` (`mouseover`/`mouseout`/`focusin`/`focusout`) that read
+  `closest('[data-tip]')` — no per-element listeners. `keydown` Escape and a
+  capture-phase `scroll` hide it.
+- **Hover-intent:** leaving the trigger delays hide by 180ms; the tooltip's own
+  `mouseenter` cancels the hide and `mouseleave` resumes it, so the "?" stays
+  clickable. `mouseout` doesn't hide when moving onto the tooltip.
+- **Positioning:** `getBoundingClientRect` + window bounds — below by default,
+  flips above when it would overflow, centred on the trigger and clamped
+  horizontally on-screen. Shows on keyboard focus for a11y.
+
+### `app.js` — migration
+- **~68 controls** converted from `title="…"` to `data-tip` (mechanical
+  `title:` → `"data-tip":`), keeping the same text + caveats ("Reboot the Pico
+  node (NOT the target machine)", serial control bytes with hex, dangerous chords
+  flagged ⚠, "Serial mode: keystrokes stream to the target's getty", …).
+- **26 `helpLink(…)` icons removed**; the docs anchor now rides *inside* the
+  tooltip via `data-tip-help` — folded onto the relevant control/header:
+  detail-header actions (ping-read-reboot / expect / offline-queue /
+  session-recording / serial-bridge / ota), section headers (Nodes, Serial
+  console, Macros, Events, Settings + Safety + Alert endpoints, Runbooks,
+  right-rail tabs), composer rows (Input→input-modes, Keys/Chords/Serial→
+  control-bytes, Macros→macros), and sheet bodies (Expect, Queue, Bridge, OTA,
+  canary rollout).
+- `promptBadge` → `data-tip` + `data-tip-help="prompt-state"`; `targetBadge`
+  (up/dead/unknown) → `data-tip` + `data-tip-help="target-liveness"`.
+
+### `app.css` — styling (light + dark aware)
+- `.sc-tooltip`: `position:fixed`, dark ink (`#26241f`, matches the serial
+  terminal), `max-width:320px`, ~9–11px padding, 13px text, rounded 8px, subtle
+  border + layered shadow, `z-index:3000`, opacity/transform fade.
+- `.sc-tip-foot` / `.sc-tip-learn` / `.sc-tip-help` (accent circular "?" pill
+  with hover/focus states). `@media (prefers-color-scheme: dark)` and
+  `:root[data-theme=…]` overrides lift the box off a dark backdrop.
+
+### `help.html` — new section
+- Added `#target-liveness` ("Machine up/dead badge") documenting the up / dead /
+  unknown target signal (node powered by target; USB host enumerated or recent
+  serial output = up; host gone but node alive = dead; can't tell = unknown), plus
+  a TOC entry under "Driving a target". The machine badge's tooltip "?" points at
+  it.
+
+Verified: `node --check hub/static/app.js` passes; help.html tag balance checked
+(section/table/div/main/nav all matched); every `data-tip-help` anchor resolves to
+a real id in help.html.

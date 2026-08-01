@@ -130,6 +130,7 @@
       <a class="toc" href="#keyboard-layout">Keyboard layout</a>
       <a class="toc" href="#ping-read-reboot">Ping · Read · Reboot</a>
       <a class="toc" href="#prompt-state">Prompt-state badges</a>
+      <a class="toc" href="#target-liveness">Machine up/dead badge</a>
       <div class="toc-group">Automation</div>
       <a class="toc" href="#macros">Macros</a>
       <a class="toc" href="#sequences">Sequences &amp; steps</a>
@@ -289,6 +290,21 @@
             <tr><td class="mono">booting</td><td>Boot chatter (<code>[ OK ]</code>, <code>systemd[1]</code>, kernel timestamps)</td></tr>
           </table></div>
           <p>It is computed hub-side from the freshest bytes of the rolling output tail (first match wins, most-urgent first), so no firmware change is needed. It is <strong>live status, never persisted</strong>: <code>null</code> while offline, exposed read-only as <code>prompt_state</code> on <code>GET /api/nodes/{id}</code>, and broadcast as a <code>node_state</code> event to every browser so badges update without any console open. It's the same matcher the <a href="#expect">expect engine</a> waits on.</p>
+        </section>
+
+        <!-- ================= TARGET LIVENESS ================= -->
+        <section id="target-liveness">
+          <h2>Machine up/dead badge <a class="permalink" href="#target-liveness">#</a></h2>
+          <p class="where">Where: <b>Node rows &amp; detail header (badge next to the node status, online nodes only).</b></p>
+          <p>Each node (Pico) is <strong>powered by the target machine's USB</strong>, so "node online" only tells you the Pico is reachable — not whether the attached machine is actually up. The hub derives a separate <strong>target liveness</strong> signal and surfaces it as its own badge, distinct from the green node dot, so you can tell a running box from a hung one at a glance.</p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Badge</th><th>Means</th><th>How it's derived</th></tr>
+            <tr><td class="mono">machine up</td><td>The attached machine is powered and running.</td><td>The node's USB host has enumerated it, <em>or</em> the target has produced serial output recently.</td></tr>
+            <tr><td class="mono">machine dead</td><td>The machine is off or hung — but the node itself is still alive and connected.</td><td>The USB host has gone away (no enumeration) while the node stays online on the swarm link. Rendered with a gentle pulse.</td></tr>
+            <tr><td class="mono">unknown</td><td>The node can't tell. Shown as a hollow grey dot (compact) or nothing (header).</td><td>Old firmware that doesn't report the signal, or a quiet line with nothing to go on — deliberately <em>not</em> read as up or dead.</td></tr>
+          </table></div>
+          <p>The badge only appears for <strong>online</strong> nodes; when a node goes offline entirely (its target lost power and took the Pico with it), the whole row dims and the node dot goes hollow instead. Target liveness is <strong>live status, never persisted</strong>: it rides the node's heartbeat as <code>target</code> and is exposed read-only on <code>GET /api/nodes/{id}</code>.</p>
+          <p class="callout info">A node that vanishes completely usually means the <em>target</em> lost power (the Pico is bus-powered from it) — see <a href="#nodes">Nodes</a>. A <span class="mono">machine dead</span> badge is the more interesting case: the node is alive and talking, but its host stopped enumerating — a hang, a power-off, or a target mid-reset.</p>
         </section>
 
         <!-- ================= MACROS ================= -->
