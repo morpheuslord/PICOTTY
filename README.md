@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="pictures/PICOTTY%20Banner.png" alt="PICOTTY — Pico TeleTYpewriter: a networked serial console with keyboard injection for a fleet of headless machines" width="100%">
+</p>
+
 # PICOTTY
 
-### *Pico TeleTYpewriter* — an archaic telex reborn as a networked serial console for a fleet of headless machines
+*Pico TeleTYpewriter — an archaic telex reborn as a networked serial console.*
 
 PICOTTY is a star-topology **serial console** for a fleet of Raspberry Pi Pico
 nodes. Each node plugs into the USB port of a headless machine and becomes a
