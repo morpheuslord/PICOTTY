@@ -150,6 +150,20 @@
   const postJSON = (p, b) => api("POST", p, b || {});
   const patchJSON = (p, b) => api("PATCH", p, b);
   const delJSON = (p) => api("DELETE", p);
+  // Like api() but returns the parsed body even on a 4xx so a server 422 (e.g. bad
+  // YAML / bad zip) surfaces its {error, detail} instead of being swallowed as a
+  // thrown "HTTP 422". Always returns an object with an `ok` flag.
+  async function apiSoft(method, path, body) {
+    const opt = { method, headers: {} };
+    if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+    let r;
+    try { r = await fetch("/api" + path, opt); } catch (e) { return { ok: false, error: "network", detail: "request failed" }; }
+    let data = null;
+    try { data = await r.json(); } catch (e) { /* non-JSON body */ }
+    if (data == null || typeof data !== "object") data = {};
+    if (data.ok == null) data.ok = r.ok;
+    return data;
+  }
 
   // ---- state -------------------------------------------------------------
   const CONSOLE_CAP = 400;
@@ -162,6 +176,7 @@
     history: [],      // {id,nodeId,text,status,ts}
     events: [],       // {ts,type,nodeId,detail}
     macros: [],       // {id,name,group,steps,runs,lastRun}
+    chords: [],       // custom key chords {id,label,chord:[...]} (custom chord editor)
     selId: null,
     selMacro: null,
     query: "",
@@ -479,7 +494,7 @@
       h("span", { style: "font-size:13px;font-weight:600" }, val));
     return h("div", { class: "nav", style: "flex:none;gap:var(--space-4);flex-wrap:nowrap;overflow:hidden" },
       h("span", { class: "nav-brand", style: "display:flex;align-items:center;gap:10px;letter-spacing:0.02em;flex:none;white-space:nowrap;margin-right:0" },
-        h("span", { style: "width:12px;height:12px;background:var(--color-accent);display:block" }), "SWARM CONTROL"),
+        h("span", { style: "width:12px;height:12px;background:var(--color-accent);display:block" }), "PICOTTY SWARM CONTROL"),
       ...links,
       h("div", { style: "display:flex;align-items:center;gap:var(--space-4);margin-left:auto;flex:none;white-space:nowrap" },
         showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Show/hide the node list rail", onClick: () => { state.leftOpen = !state.leftOpen; renderView(); } }, state.leftOpen ? "‹ Nodes" : "› Nodes") : null,
@@ -631,11 +646,16 @@
         (online ? targetBadge(s.target, { big: true }) : null),
         (online ? promptBadge(s.promptState, { big: true }) : null)),
       h("div", { style: "display:flex;flex-wrap:wrap;gap:2px var(--space-4);font-size:12px;color:var(--color-neutral-700);font-family:ui-monospace,Menlo,monospace;overflow:hidden" },
-        h("span", {}, s.ip || ""), h("span", {}, "fw " + (s.fw || "")), h("span", {}, "rtt " + (online ? (s.rttMs != null ? s.rttMs + "ms" : "—") : "—")),
+        h("span", {}, s.ip || ""),
+        h("span", { title: "fw = the running firmware's FW_VERSION from the node's code.py — NOT the OTA bundle name. See the muted “flashed:” line for the last bundle pushed.", "data-tip-help": "ota" }, "fw " + (s.fw || "")),
+        h("span", {}, "rtt " + (online ? (s.rttMs != null ? s.rttMs + "ms" : "—") : "—")),
         h("span", {}, "caps " + (s.caps || "")), h("span", {}, "group " + (s.group || "")),
         h("span", {}, "kbd: " + (s.layout || "us")),                     // phase 1: read-only layout
         (bridgePortFor(s.id) != null                                     // phase 8: bridge endpoint
           ? h("span", { style: "color:var(--color-accent-700)" }, "serial bridge: " + (state.bridge.bind || "0.0.0.0") + ":" + bridgePortFor(s.id))
+          : null),
+        (s.lastOta                                                       // OTA provenance: last bundle flashed (strip " @ <ts>")
+          ? h("span", { style: "color:var(--color-neutral-600)", title: "Last firmware bundle flashed to this node via OTA (provenance). Distinct from fw/FW_VERSION.", "data-tip-help": "ota" }, "flashed: " + String(s.lastOta).replace(/\s*@.*$/, ""))
           : null))));
     const hasNode = !!s.id;
     host.appendChild(h("div", { style: "flex:none;margin-left:auto;display:flex;align-items:center;gap:var(--space-2);padding:6px var(--space-4);flex-wrap:wrap;justify-content:flex-end" },
@@ -652,7 +672,8 @@
       helpLink("serial-bridge", "Raw serial bridge"),
       (nodeHasOta(s) ? h("button", { class: "btn btn-secondary", title: "Push a firmware bundle to this node (chunked, checksummed, auto-revert)", disabled: !hasNode, onClick: () => openOtaSheet(s.id) }, "Firmware") : null),  // phase 12
       (nodeHasOta(s) ? helpLink("ota", "OTA firmware updates") : null),
-      h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", title: "Reboot the Pico node (NOT the target machine) — drops its socket briefly", onClick: doRebootNode }, "Reboot node"),
+      h("button", { class: "btn btn-secondary", style: "color:var(--color-accent)", title: "Reboot the attached MACHINE / target (NOT the Pico node): serial reboot, Ctrl+Alt+Del, or Magic SysRq — each confirms first", "data-tip-help": "reboot-machine", disabled: !hasNode, onClick: () => openRebootMachineSheet(s.id) }, "Reboot machine"),
+      h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", title: "Reboot the Pico NODE (NOT the target machine) — drops its socket briefly", onClick: doRebootNode }, "Reboot node"),
       helpLink("ping-read-reboot", "Reboot node")));
   }
 
@@ -710,6 +731,8 @@
     const chords = [["CTRL+C", "inherit"], ["CTRL+D", "inherit"], ["CTRL+ALT+DEL", "var(--color-accent-700)"], ["CTRL+ALT+F2", "inherit"], ["ALT+SysRq+B", "var(--color-accent-700)"]]
       .map(([label, color]) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px;color:" + color, title: CHORD_TIP[label] || label, disabled, onClick: () => sendChord(label) }, label));
     const macros = state.macros.slice(0, 4).map((m) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", title: "Run macro “" + m.name + "” on " + (state.selId || "this node"), disabled, onClick: () => runMacroOn(m.id, state.selId) }, m.name));
+    const customChords = (state.chords || []).map((c) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", title: "Custom chord “" + c.label + "” → " + (c.chord || []).join("+") + " — sent as HID keys to " + (state.selId || "this node"), "data-tip-help": "custom-chords", disabled, onClick: () => sendSavedChord(c.label, c.chord) }, c.label));
+    const manageChords = h("button", { class: "btn btn-ghost", style: "padding:3px 9px;font-size:12px", title: "Add, edit or delete your custom key chords", "data-tip-help": "custom-chords", onClick: () => openChordManager() }, "＋ Chords");
     return [
       h("div", { style: "display:flex;gap:var(--space-2)" }, ui.composerInput,
         h("button", { class: "btn btn-primary", title: "Type the text above onto the target as HID keystrokes", disabled, onClick: sendText }, "Send")),
@@ -720,6 +743,7 @@
           h("input", { class: "input", type: "number", min: "0", step: "5", value: state.charDelay, title: "Per-character HID delay (ms)", style: "width:64px;min-height:28px;padding:2px 6px",
             onChange: (e) => { state.charDelay = Number(e.target.value) || 0; } }), "ms")),
       h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Chords"), helpLink("control-bytes", "Control keys & chords"), ...chords),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Custom"), ...customChords, manageChords),
       h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Macros"), helpLink("macros", "Macros"), ...macros),
     ];
   }
@@ -1268,6 +1292,130 @@
         catch (e) { toast("Failed", node.id + " · reboot error"); }
       });
   }
+  // ---- Reboot the attached MACHINE (target), not the Pico node -----------
+  // Three separate methods, each behind its own confirm dialog. Titled to keep
+  // the machine-vs-node distinction unambiguous.
+  function rebootMachineSerial(nodeId) {
+    const node = findNode(nodeId) || {};
+    if (!nodeHasSerialTx(node)) { toast("Failed", nodeId + " · firmware lacks serial_tx"); return; }
+    confirmDialog("Reboot machine via serial?",
+      "Send the shell command reboot over the serial getty to the MACHINE attached to " + nodeId + " (not the Pico node). Needs a logged-in serial shell on the target.",
+      "Send reboot", async () => {
+        pushLine(nodeId, "in", "reboot");
+        if (state.demo) { pushLine(nodeId, "out", "The system is going down for reboot NOW!"); return; }
+        try { const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/cmd", { type: "send", data: "reboot\n" }); if (r.ok) toast("Reboot machine", nodeId + " · serial reboot sent"); else toast("Failed", r.detail || r.error || "serial reboot rejected"); }
+        catch (e) { toast("Failed", nodeId + " · serial reboot error"); }
+      });
+  }
+  function rebootMachineCAD(nodeId) {
+    confirmDialog("Reboot machine via Ctrl+Alt+Del?",
+      "Send CTRL+ALT+DELETE as HID keys to the MACHINE attached to " + nodeId + " (not the Pico node). On most systems this triggers a reboot.",
+      "Send Ctrl+Alt+Del", async () => {
+        pushLine(nodeId, "in", "CTRL+ALT+DELETE");
+        if (state.demo) { pushLine(nodeId, "out", "[CTRL+ALT+DELETE] injected via HID"); return; }
+        try { const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/keys", { chord: ["CTRL", "ALT", "DELETE"] }); if (r.ok) toast("Reboot machine", nodeId + " · Ctrl+Alt+Del sent"); else toast("Failed", r.detail || r.error || "keys rejected"); }
+        catch (e) { toast("Failed", nodeId + " · reboot error"); }
+      });
+  }
+  function rebootMachineSysrq(nodeId) {
+    confirmDialog("Reboot machine via Magic SysRq?",
+      "Fire Alt+SysRq+B on the MACHINE attached to " + nodeId + " — an immediate kernel reboot with NO clean shutdown (requires kernel.sysrq on the target). Not the Pico node.",
+      "Send SysRq reboot", async () => {
+        pushLine(nodeId, "in", "ALT+SysRq+B");
+        if (state.demo) { pushLine(nodeId, "out", "sysrq: Resetting"); return; }
+        try { const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/sysrq", { key: "b" }); if (r.ok) toast("Reboot machine", nodeId + " · SysRq reboot sent"); else toast("Failed", r.detail || r.error || "sysrq rejected"); }
+        catch (e) { toast("Failed", nodeId + " · sysrq error"); }
+      });
+  }
+  function openRebootMachineSheet(nodeId) {
+    const node = findNode(nodeId) || {};
+    const serialOk = nodeHasSerialTx(node);
+    const method = (label, desc, btnLabel, fn, enabled, tip) => h("div", { style: "display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--color-divider)" },
+      h("div", { style: "flex:1;min-width:0" }, h("div", { style: "font-size:13px;font-weight:600" }, label), h("div", { style: "font-size:12px;color:var(--color-neutral-700);margin-top:2px" }, desc)),
+      h("button", { class: "btn btn-secondary", style: "flex:none;color:var(--color-accent-700)", title: tip, disabled: !enabled, onClick: fn }, btnLabel));
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:4px" },
+      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "These reboot the ", h("b", {}, "attached machine"), ", NOT the Pico node. Each asks for confirmation first."),
+      method("Serial reboot", "Runs the shell command reboot over the serial getty (needs a logged-in shell on the target).", "Serial reboot", () => rebootMachineSerial(nodeId), serialOk, serialOk ? "Send reboot over serial (confirms first)" : "Unavailable: node firmware lacks serial_tx"),
+      method("Ctrl+Alt+Del", "Sends CTRL+ALT+DELETE as HID keys — the classic three-finger reset.", "Ctrl+Alt+Del", () => rebootMachineCAD(nodeId), true, "Send CTRL+ALT+DELETE as HID keys (confirms first)"),
+      method("Magic SysRq", "Alt+SysRq+B — immediate kernel reboot, no clean shutdown (needs kernel.sysrq on the target).", "SysRq reboot", () => rebootMachineSysrq(nodeId), true, "Fire Alt+SysRq+B on the target (confirms first)"));
+    openSheet("reboot-machine", "Reboot machine — " + nodeId, body,
+      [h("button", { class: "btn btn-primary", onClick: () => closeSheet("reboot-machine") }, "Close")], 560);
+  }
+
+  // ---- Custom key chords (dedicated editor, separate from macros) ---------
+  const chordJoin = (c) => (c || []).join("+");
+  async function refreshChords() {
+    if (state.demo) return;
+    try { const d = await getJSON("/chords"); state.chords = (d.chords || []).map((c) => ({ id: c.id, label: c.label, chord: c.chord || [] })); }
+    catch (e) { /* keep */ }
+  }
+  // Re-render the HID composer so freshly-added custom chord buttons appear.
+  function refreshHidComposerChords() { if (state.view === "nodes") renderComposer(); }
+  // Clicking a saved chord sends it as HID keys to the target (confirming when it
+  // matches a destructive pattern and the safety toggle is on).
+  function sendSavedChord(label, chord) {
+    const node = sel(); if (!node) return;
+    const joined = chordJoin(chord);
+    const go = () => {
+      pushLine(node.id, "in", label + " (" + joined + ")");
+      if (state.demo) { pushLine(node.id, "out", "[" + joined + "] injected via HID"); return; }
+      dispatchKeys(node.id, chord, label);
+    };
+    if (needsConfirm(joined)) return confirmDialog("Send " + label + "?", "This chord (" + joined + ") can reset or interrupt the target machine on " + node.id + ". Send it?", "Send", go);
+    go();
+  }
+  function openChordManager() {
+    const listHost = h("div", { class: "sc-scroll", style: "max-height:240px;overflow-y:auto;border:1px solid var(--color-divider)" });
+    let editingId = null;
+    const labelInput = h("input", { class: "input", style: "flex:1;min-width:130px", title: "A short label for the quick button, e.g. VT2", placeholder: "label, e.g.  VT2" });
+    const chordInput = h("input", { class: "input", style: "flex:1;min-width:160px;font-family:ui-monospace,monospace", title: "Keys joined with + — split on + and upper-cased, e.g. CTRL+ALT+F2", placeholder: "chord, e.g.  CTRL+ALT+F2" });
+    const saveBtn = h("button", { class: "btn btn-secondary", title: "Save this chord (keys are split on + and upper-cased)", onClick: () => save() }, "Add chord");
+    const parseChord = (v) => String(v).split("+").map((p) => p.trim().toUpperCase()).filter(Boolean);
+    const resetForm = () => { editingId = null; labelInput.value = ""; chordInput.value = ""; saveBtn.textContent = "Add chord"; };
+    function renderList() {
+      listHost.innerHTML = "";
+      const chords = state.chords || [];
+      if (!chords.length) { listHost.appendChild(h("div", { style: "padding:14px;font-size:12px;color:var(--color-neutral-600);text-align:center" }, "No custom chords yet — add one below.")); return; }
+      for (const c of chords) {
+        listHost.appendChild(h("div", { style: "display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--color-divider)" },
+          h("span", { style: "font-weight:600;font-size:13px;flex:none;min-width:80px" }, c.label),
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:12px;flex:1;min-width:0;word-break:break-all" }, chordJoin(c.chord)),
+          h("button", { class: "btn btn-ghost", style: "padding:0 8px;flex:none", title: "Edit this chord", onClick: () => { editingId = c.id; labelInput.value = c.label; chordInput.value = chordJoin(c.chord); saveBtn.textContent = "Save chord"; labelInput.focus(); } }, "Edit"),
+          h("button", { class: "btn btn-ghost", style: "padding:0 8px;flex:none;color:var(--color-accent)", title: "Delete this chord", onClick: () => del(c) }, "×")));
+      }
+    }
+    async function save() {
+      const label = labelInput.value.trim();
+      const chord = parseChord(chordInput.value);
+      if (!label) { toast("Failed", "give the chord a label"); labelInput.focus(); return; }
+      if (!chord.length) { toast("Failed", "enter a chord like CTRL+ALT+F2"); chordInput.focus(); return; }
+      if (state.demo) {
+        if (editingId != null) { const c = (state.chords || []).find((x) => x.id === editingId); if (c) { c.label = label; c.chord = chord; } }
+        else state.chords.push({ id: ++seq, label, chord });
+        resetForm(); renderList(); refreshHidComposerChords(); return;
+      }
+      try {
+        const r = editingId != null
+          ? await apiSoft("PATCH", "/chords/" + editingId, { label, chord })
+          : await apiSoft("POST", "/chords", { label, chord });
+        if (!r.ok) { toast("Failed", r.detail || r.error || "could not save chord"); return; }
+        await refreshChords(); resetForm(); renderList(); refreshHidComposerChords(); toast("Chord", "saved " + label);
+      } catch (e) { toast("Failed", "chord save error"); }
+    }
+    async function del(c) {
+      if (state.demo) { state.chords = (state.chords || []).filter((x) => x.id !== c.id); if (editingId === c.id) resetForm(); renderList(); refreshHidComposerChords(); return; }
+      try { await delJSON("/chords/" + c.id); await refreshChords(); if (editingId === c.id) resetForm(); renderList(); refreshHidComposerChords(); toast("Chord", "deleted " + c.label); }
+      catch (e) { toast("Failed", "could not delete chord"); }
+    }
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
+      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Custom key chords appear as quick buttons in the HID composer. Keys are split on “+” and upper-cased (e.g. CTRL+ALT+F2). Clicking one sends it as HID keys to the selected node."),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Chords"), listHost),
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" }, kicker("New"), labelInput, chordInput, saveBtn));
+    openSheet("chord-manager", "Custom chords", body,
+      [h("button", { class: "btn btn-primary", onClick: () => closeSheet("chord-manager") }, "Done")], 600);
+    renderList();
+  }
+
   async function runMacroOn(macroId, nodeId) {
     if (!nodeId) { toast("Failed", "Select a node first"); return; }
     const m = state.macros.find((x) => x.id === macroId); if (!m) return;
@@ -1670,8 +1818,9 @@
   function openBundleManager() {
     otaSheetHooks = null;
     closeSheet("ota-sheet");
-    const nameInput = h("input", { class: "input", style: "flex:1;min-width:180px;font-family:ui-monospace,monospace", placeholder: "bundle name, e.g.  fw-1.1.0" });
-    const fileInput = h("input", { class: "input", type: "file", multiple: "multiple", style: "flex:1;min-width:200px" });
+    const nameInput = h("input", { class: "input", style: "flex:1;min-width:180px;font-family:ui-monospace,monospace", title: "Bundle name (used as-is for individual files; for a .zip it defaults to the file name if left blank)", placeholder: "bundle name, e.g.  fw-1.1.0" });
+    const fileInput = h("input", { class: "input", type: "file", multiple: "multiple", title: "Pick one or more firmware files — read in-browser and base64'd into a bundle", style: "flex:1;min-width:200px" });
+    const zipInput = h("input", { class: "input", type: "file", accept: ".zip", title: "Upload a whole firmware as a .zip — the hub unzips and stages every file. Name defaults to the file name.", style: "flex:1;min-width:200px" });
     const listHost = h("div", { class: "sc-scroll", style: "max-height:200px;overflow-y:auto;border:1px solid var(--color-divider)" });
 
     function renderList() {
@@ -1702,6 +1851,25 @@
         if (r.ok) { nameInput.value = ""; fileInput.value = ""; await refreshBundles(); renderList(); renderRolloutBundles(); toast("Bundle", "created " + name); }
         else toast("Failed", r.detail || r.error || "bundle rejected");
       } catch (e) { toast("Failed", "bundle upload error"); }
+    }
+    // Whole-firmware .zip upload: the hub decompresses and stages every file. Name
+    // defaults to the file's basename sanitized to [A-Za-z0-9._-].
+    async function createZip() {
+      const fl = zipInput.files;
+      if (!fl || !fl.length) { toast("Failed", "pick a .zip file"); return; }
+      const file = fl[0];
+      let name = nameInput.value.trim();
+      if (!name) name = String(file.name).replace(/\.zip$/i, "").replace(/[^A-Za-z0-9._-]/g, "-");
+      if (state.demo) {
+        state.bundles.unshift({ name, files: ["(from " + file.name + ")"], total_sha256: (Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)), created_at: now() });
+        nameInput.value = ""; zipInput.value = ""; renderList(); renderRolloutBundles(); toast("Bundle", "created " + name + " from zip (demo)"); return;
+      }
+      try {
+        const zip_b64 = await readFileB64(file);
+        const r = await apiSoft("POST", "/ota/bundles/zip", { name, zip_b64 });
+        if (r.ok) { nameInput.value = ""; zipInput.value = ""; await refreshBundles(); renderList(); renderRolloutBundles(); toast("Bundle", "created " + name + " from zip"); }
+        else toast("Failed", r.detail || r.error || "zip rejected");
+      } catch (e) { toast("Failed", "zip upload error"); }
     }
 
     // Rollout controls: pick ota-capable nodes (or a group) + stagger.
@@ -1757,7 +1925,9 @@
         kicker("New"), nameInput),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
         kicker("Files"), fileInput, h("button", { class: "btn btn-secondary", title: "Read the chosen files in-browser and store them as a firmware bundle", onClick: create }, "Create bundle")),
-      h("div", { style: "font-size:11px;color:var(--color-neutral-600);line-height:1.5" }, "Files are read in the browser and base64-encoded into the bundle manifest on the hub."),
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
+        kicker("Zip"), zipInput, h("button", { class: "btn btn-secondary", title: "Upload a whole firmware .zip — the hub unzips and stages every file. Name defaults to the file name.", "data-tip-help": "ota", onClick: createZip }, "Upload .zip")),
+      h("div", { style: "font-size:11px;color:var(--color-neutral-600);line-height:1.5" }, "Files are read in the browser and base64-encoded into the bundle manifest on the hub. Or upload a whole firmware .zip and the hub unzips and stages every file."),
       h("div", { style: "border-top:1px solid var(--color-divider)" }),
       h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, h("b", {}, "Canary rollout"), " — updates one node, waits for it to come back ", h("b", {}, "healthy"), ", then staggers the rest. Follow each node's progress bar in its console."),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Bundle"), rollBundleHost),
@@ -1816,7 +1986,10 @@
         onClick: () => { state.selRunbook = rb.id; renderView(); } },
         h("td", { style: "font-weight:600" }, rb.name),
         h("td", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px" }, (rb.yaml || "").split("\n").filter((l) => /^\s*-/.test(l)).length + " steps"),
-        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", title: "Run “" + rb.name + "” across chosen nodes or a group", onClick: (e) => { e.stopPropagation(); openRunbookRun(rb); } }, "Run"))));
+        h("td", {}, h("div", { style: "display:flex;gap:6px;justify-content:flex-end" },
+          h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", title: "View & edit “" + rb.name + "” — loads its YAML from the hub", onClick: (e) => { e.stopPropagation(); openRunbookEditor(rb); } }, "View / Edit"),
+          h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", title: "Run “" + rb.name + "” across chosen nodes or a group", onClick: (e) => { e.stopPropagation(); openRunbookRun(rb); } }, "Run"),
+          h("button", { class: "btn btn-ghost", style: "padding:2px 7px;font-size:12px;color:var(--color-accent)", title: "Delete “" + rb.name + "” (confirms first)", onClick: (e) => { e.stopPropagation(); deleteRunbook(rb); } }, "Delete")))));
     }
     const left = h("div", { style: "flex:1 1 auto;min-width:0;display:flex;flex-direction:column;min-height:0;border-right:2px solid var(--color-divider)" },
       h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider)" },
@@ -1826,7 +1999,7 @@
       state.runbooks.length
         ? h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
             h("table", { class: "table", style: "width:100%" },
-              h("thead", {}, h("tr", {}, ...["Name", "Steps", ""].map((t) => h("th", {}, t)))), rows))
+              h("thead", {}, h("tr", {}, ...["Name", "Steps", "Actions"].map((t) => h("th", {}, t)))), rows))
         : h("div", { style: "flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--color-neutral-600);padding:var(--space-4)" },
             h("div", { style: "font-size:13px;font-weight:600" }, "No runbooks yet"),
             h("div", { style: "font-size:12px;max-width:360px;text-align:center;line-height:1.5" }, "A runbook is a YAML expect flow — wait for prompts, send responses — that you can run across a whole group at once."),
@@ -1867,25 +2040,43 @@
   function openRunbookEditor(existing) {
     const draft = { id: existing ? existing.id : null, name: existing ? existing.name : "", yaml: existing ? existing.yaml : RUNBOOK_PLACEHOLDER };
     const nameInput = h("input", { class: "input", style: "flex:1;min-width:180px", value: draft.name, placeholder: "runbook name", onInput: (e) => { draft.name = e.target.value; } });
-    const yamlArea = h("textarea", { class: "input", style: "min-height:280px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;overflow:auto", value: draft.yaml, onInput: (e) => { draft.yaml = e.target.value; } });
+    const yamlArea = h("textarea", { class: "input", style: "min-height:280px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;overflow:auto", title: "Runbook YAML: wait_for / send / delay_ms steps. The hub validates it on save and rejects bad YAML with a 422.", value: draft.yaml, onInput: (e) => { draft.yaml = e.target.value; } });
+    // Visible inline error for a server 422 (bad YAML), so the failure is attached
+    // to the editor rather than only a transient toast.
+    const errBox = h("div", { style: "display:none;font-size:12px;color:var(--color-accent);white-space:pre-wrap;border:1px solid var(--color-accent);padding:8px 10px" });
+    const showErr = (msg) => { errBox.textContent = msg || ""; errBox.style.display = msg ? "block" : "none"; };
     async function save() {
+      showErr("");
       const name = draft.name.trim(); if (!name) { toast("Failed", "Give the runbook a name"); nameInput.focus(); return; }
       if (state.demo) { if (draft.id == null) { draft.id = ++seq; state.runbooks.push({ id: draft.id, name, yaml: draft.yaml }); } else { const r = selRunbookById(draft.id); if (r) { r.name = name; r.yaml = draft.yaml; } } state.selRunbook = draft.id; closeSheet("runbook-editor"); renderView(); return; }
       try {
         let id = draft.id;
-        if (id == null) { const r = await postJSON("/runbooks", { name, yaml: draft.yaml }); if (!r.ok) { toast("Failed", r.detail || r.error); return; } id = r.id; }
-        else { const r = await patchJSON("/runbooks/" + id, { name, yaml: draft.yaml }); if (r && r.ok === false) { toast("Failed", r.detail || r.error); return; } }
+        // apiSoft returns the body even on a 422 so the bad-YAML detail is shown.
+        if (id == null) { const r = await apiSoft("POST", "/runbooks", { name, yaml: draft.yaml }); if (!r.ok) { const m = r.detail || r.error || "invalid YAML"; showErr("Rejected: " + m); toast("Failed", m); return; } id = r.id; }
+        else { const r = await apiSoft("PATCH", "/runbooks/" + id, { name, yaml: draft.yaml }); if (!r.ok) { const m = r.detail || r.error || "invalid YAML"; showErr("Rejected: " + m); toast("Failed", m); return; } }
         closeSheet("runbook-editor"); toast("Runbook", (draft.id == null ? "Created " : "Saved ") + name); await refreshRunbooks(id);
-      } catch (e) { toast("Failed", "could not save runbook (check YAML)"); }
+      } catch (e) { showErr("Could not save runbook (check YAML)."); toast("Failed", "could not save runbook (check YAML)"); }
     }
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
       h("div", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }, kicker("Name"), nameInput),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("YAML"), yamlArea),
+      errBox,
       h("div", { style: "font-size:11px;color:var(--color-neutral-600);line-height:1.5" }, "Steps: ", h("code", {}, "wait_for"), " (with optional ", h("code", {}, "timeout_ms"), "), ", h("code", {}, "send"), ", ", h("code", {}, "delay_ms"), ". Validated by the hub on save."));
     openSheet("runbook-editor", draft.id == null ? "New runbook" : "Edit runbook", body,
       [draft.id != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: () => { const r = selRunbookById(draft.id); closeSheet("runbook-editor"); if (r) deleteRunbook(r); } }, "Delete") : null,
        h("button", { class: "btn btn-secondary", onClick: () => closeSheet("runbook-editor") }, "Cancel"),
        h("button", { class: "btn btn-primary", title: "Validate the YAML and save this runbook", onClick: save }, draft.id == null ? "Create" : "Save")], 720);
+    // View/Edit: pull the authoritative name + YAML from the hub, then fill the
+    // fields (the modal opens instantly with the cached copy, then refreshes).
+    if (existing && existing.id != null && !state.demo) {
+      getJSON("/runbooks/" + existing.id).then((r) => {
+        if (r && r.ok && r.runbook) {
+          draft.name = r.runbook.name != null ? r.runbook.name : draft.name;
+          draft.yaml = r.runbook.yaml != null ? r.runbook.yaml : draft.yaml;
+          nameInput.value = draft.name; yamlArea.value = draft.yaml;
+        }
+      }).catch(() => {});
+    }
   }
   const selRunbookById = (id) => state.runbooks.find((r) => r.id === id) || null;
   function deleteRunbook(rb) {
@@ -2033,6 +2224,7 @@
     rec.layout = meta.layout || rec.layout || "us";
     rec.promptState = meta.prompt_state != null ? meta.prompt_state : rec.promptState;
     rec.target = meta.target != null ? meta.target : (rec.target || "unknown");
+    rec.lastOta = meta.last_ota != null ? meta.last_ota : (rec.lastOta || null);
     rec.lastSeen = meta.last_seen || now();
     rec.inflight = meta.inflight || 0;
     return rec;
@@ -2047,20 +2239,21 @@
   function apiNodeToRec(n) {
     return { id: n.id, label: n.label || "", group: n.group || "", ip: n.ip || "", fw: n.fw_version || "",
       status: n.status, rttMs: n.rtt_ms, caps: (n.capabilities || []).join(","), lastSeen: n.last_seen || now(), inflight: n.inflight || 0,
-      layout: n.layout || "us", promptState: n.prompt_state || null, target: n.target || "unknown" };
+      layout: n.layout || "us", promptState: n.prompt_state || null, target: n.target || "unknown", lastOta: n.last_ota || null };
   }
   async function loadLive() {
     const health = await getJSON("/health");
     state.hub.uptime_ms = health.uptime_ms; state.hub.version = health.version;
     state.hub.bind = health.bind; state.hub.swarm_port = health.swarm_port; state.hub.web_port = health.web_port;
     state.hub.nodes_online = health.nodes_online; state.hub.nodes_total = health.nodes_total;
-    const [nodes, macros, settings, events, bridge, runbooks, bundles] = await Promise.all([
+    const [nodes, macros, settings, events, bridge, runbooks, bundles, chords] = await Promise.all([
       getJSON("/nodes"), getJSON("/macros"), getJSON("/settings"), getJSON("/events?limit=60"),
       getJSON("/bridge").catch(() => ({})), getJSON("/runbooks").catch(() => ({})),
-      getJSON("/ota/bundles").catch(() => ({})),
+      getJSON("/ota/bundles").catch(() => ({})), getJSON("/chords").catch(() => ({})),
     ]);
     state.nodes = (nodes.nodes || []).map(apiNodeToRec);
     state.macros = (macros.macros || []).map((m) => ({ id: m.id, name: m.name, group: m.group, steps: m.steps, runs: 0, lastRun: null }));
+    state.chords = (chords.chords || []).map((c) => ({ id: c.id, label: c.label, chord: c.chord || [] }));
     state.settings = settings.settings || {};
     state.events = (events.events || []).map((e) => ({ ts: e.ts, type: e.type, nodeId: e.node_id, detail: e.detail }));
     state.bridge = { enabled: !!bridge.enabled, bind: bridge.bind || "", ports: bridge.ports || [] };
@@ -2081,7 +2274,7 @@
     hub: { uptime_ms: 3 * 3600e3, bind: "hub.local", swarm_port: 9000, web_port: 8080, version: "demo" },
     settings: { heartbeat_interval_ms: 5000, stale_timeout_ms: 15000, output_retention_days: 30, event_retention_days: 90, require_confirm_dangerous: true },
     nodes: [
-      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.0.0", status: "online", rttMs: 3, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login", target: "up" },
+      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.0.0", status: "online", rttMs: 3, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login", target: "up", lastOta: "fw-1.1.0 @ 1699900000000" },
       { id: "node-02", label: "example target two", group: "group-a", ip: "10.0.0.12", fw: "1.0.0", status: "online", rttMs: 5, ageMs: 4000, caps: "hid,cdc,serial_tx,ota", layout: "de", promptState: "shell", target: "down" },
       { id: "node-03", label: "example target three (old fw)", group: "group-b", ip: "10.0.0.13", fw: "0.9.4", status: "offline", rttMs: null, ageMs: 8600e3, caps: "hid,cdc", layout: "us", promptState: null },
     ],
@@ -2100,6 +2293,7 @@
     ],
     history: [{ id: "c-0001", nodeId: "node-01", text: "uptime", status: "done", ageMs: 42000 }],
     runbooks: [{ id: 1, name: "log-in", yaml: "name: log-in\nsteps:\n  - wait_for: \"login:\"\n    timeout_ms: 30000\n  - send: \"root\\n\"\n  - wait_for: \"[Pp]assword:\"\n  - send: \"toor\\n\"\n  - wait_for: \"[#$] $\"\n" }],
+    chords: [{ id: 1, label: "VT2", chord: ["CTRL", "ALT", "F2"] }, { id: 2, label: "VT1", chord: ["CTRL", "ALT", "F1"] }],
     bridge: { enabled: false, bind: "0.0.0.0", ports: [] },
     bundles: [{ name: "fw-1.1.0", files: ["firmware.uf2", "manifest.json"], total_sha256: "9f2c4b7a1e6d3f80c5a2b9e4d7f1a0c3b8e6d5f4a2c1b0e9d8f7a6c5b4e3d2f1", created_at: null, ageMs: 6 * 3600e3 }],
   };
@@ -2124,7 +2318,9 @@
       status: n.status || "online", rttMs: n.rttMs != null ? n.rttMs : null, caps: n.caps || "hid,cdc",
       lastSeen: now() - (n.ageMs || 0), inflight: 0,
       layout: n.layout || "us", promptState: n.promptState != null ? n.promptState : null, target: n.target || "unknown",
+      lastOta: n.lastOta != null ? n.lastOta : null,
     }));
+    state.chords = (d.chords || []).map((c) => ({ id: c.id, label: c.label, chord: c.chord || [] }));
     state.bridge = Object.assign({ enabled: false, bind: "0.0.0.0", ports: [] }, d.bridge || {});
     state.bundles = (d.bundles || []).map((b) => ({ name: b.name, files: b.files || [], total_sha256: b.total_sha256,
       created_at: b.created_at != null ? b.created_at : (b.ageMs != null ? now() - b.ageMs : null) }));

@@ -127,8 +127,10 @@
       <div class="toc-group">Driving a target</div>
       <a class="toc" href="#input-modes">Input modes: HID vs Serial</a>
       <a class="toc" href="#control-bytes">Control bytes &amp; keys</a>
+      <a class="toc" href="#custom-chords">Custom chords</a>
       <a class="toc" href="#keyboard-layout">Keyboard layout</a>
       <a class="toc" href="#ping-read-reboot">Ping · Read · Reboot</a>
+      <a class="toc" href="#reboot-machine">Reboot machine</a>
       <a class="toc" href="#prompt-state">Prompt-state badges</a>
       <a class="toc" href="#target-liveness">Machine up/dead badge</a>
       <div class="toc-group">Automation</div>
@@ -249,6 +251,23 @@
           <p>You can also just press these keys while focused in the Serial field — they are intercepted and sent as the right bytes.</p>
         </section>
 
+        <!-- ================= CUSTOM CHORDS ================= -->
+        <section id="custom-chords">
+          <h2>Custom chords <a class="permalink" href="#custom-chords">#</a></h2>
+          <p class="where">Where: <b>Console composer → HID <em>Custom</em> row → “＋ Chords”.</b></p>
+          <p>Beyond the built-in chords, you can save your own reusable key combinations — a dedicated store separate from macros. Each is a <strong>label</strong> plus a <strong>chord</strong> string like <span class="kbd">CTRL+ALT+F2</span>; the string is split on <code>+</code> and upper-cased into a keys list.</p>
+          <ul>
+            <li><strong>Manage:</strong> the “＋ Chords” button opens a small manager to add, edit and delete chords.</li>
+            <li><strong>Use:</strong> every saved chord shows up as a quick button on the composer's <em>Custom</em> row. Clicking it sends the chord as HID keys to the selected node.</li>
+            <li><strong>Safety:</strong> a custom chord matching a destructive pattern (e.g. contains <code>CTRL+ALT+DEL</code> or <code>SysRq</code>) still honours the confirm-before-firing toggle.</li>
+          </ul>
+          <div class="tags">
+            <span class="endpoint"><b>GET/POST</b> /api/chords</span>
+            <span class="endpoint"><b>PATCH/DELETE</b> /api/chords/{id}</span>
+            <span class="endpoint"><b>POST</b> /api/nodes/{id}/keys</span>
+          </div>
+        </section>
+
         <!-- ================= KEYBOARD LAYOUT ================= -->
         <section id="keyboard-layout">
           <h2>Keyboard layout <a class="permalink" href="#keyboard-layout">#</a></h2>
@@ -272,7 +291,21 @@
             <tr><td><strong>Read serial</strong></td><td>Asks the node to flush its serial receive buffer to the hub — useful to pull bytes the target emitted without a trailing newline.</td><td class="mono">POST /api/nodes/{id}/read</td></tr>
             <tr><td><strong>Reboot node</strong></td><td>Reboots the <em>Pico</em>, not the target. The node drops its swarm socket briefly and reattaches; the attached machine is unaffected.</td><td class="mono">POST /api/nodes/{id}/reboot</td></tr>
           </table></div>
-          <p class="callout warn"><strong>Reboot node</strong> prompts for confirmation. It reboots the node hardware (HID + serial re-enumerate on reconnect); it does <strong>not</strong> reboot or power-cycle the target machine. To reset the target, use a power chord like <a href="#control-bytes">CTRL+ALT+DEL</a> in HID mode.</p>
+          <p class="callout warn"><strong>Reboot node</strong> prompts for confirmation. It reboots the node hardware (HID + serial re-enumerate on reconnect); it does <strong>not</strong> reboot or power-cycle the target machine. To reset the target, use <a href="#reboot-machine">Reboot machine</a>.</p>
+        </section>
+
+        <!-- ================= REBOOT MACHINE ================= -->
+        <section id="reboot-machine">
+          <h2>Reboot machine <a class="permalink" href="#reboot-machine">#</a></h2>
+          <p class="where">Where: <b>Detail header → “Reboot machine” button</b> (distinct from “Reboot node”).</p>
+          <p>“Reboot machine” reboots the <strong>attached target machine</strong>, not the Pico node. It opens a menu of three methods, each behind its own confirmation dialog:</p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Method</th><th>Does</th><th>Endpoint</th></tr>
+            <tr><td><strong>Serial reboot</strong></td><td>Writes the shell command <code>reboot</code> over the serial getty. Needs a logged-in serial shell; enabled only when the node advertises <code>serial_tx</code>.</td><td class="mono">POST /api/nodes/{id}/cmd {type:"send", data:"reboot\n"}</td></tr>
+            <tr><td><strong>Ctrl+Alt+Del</strong></td><td>Sends <span class="kbd">CTRL+ALT+DELETE</span> as HID keys — the classic three-finger reset.</td><td class="mono">POST /api/nodes/{id}/keys {chord:["CTRL","ALT","DELETE"]}</td></tr>
+            <tr><td><strong>Magic SysRq</strong></td><td><span class="kbd">Alt+SysRq+B</span> — an immediate kernel reboot with no clean shutdown; needs <code>kernel.sysrq</code> on the target.</td><td class="mono">POST /api/nodes/{id}/sysrq {key:"b"}</td></tr>
+          </table></div>
+          <p class="callout warn"><strong>These reset the target machine, not the node.</strong> Serial reboot is the graceful option; Ctrl+Alt+Del depends on the target's config; Magic SysRq is the hard, last-resort reboot for a hung machine.</p>
         </section>
 
         <!-- ================= PROMPT STATE ================= -->
@@ -480,8 +513,11 @@ steps:
           <ul>
             <li><strong>Firmware</strong> opens the per-node update sheet: pick a bundle, <strong>Update firmware</strong>, watch the live byte-progress bar. The Pico flashes, reboots, and must report <strong>healthy</strong> to confirm.</li>
             <li><strong>Manage bundles…</strong> creates a bundle from a name + files (read in the browser, base64'd into the manifest) and lists existing bundles with their short SHA.</li>
+            <li><strong>Upload .zip</strong> stages a whole firmware at once: pick a <code>.zip</code> and the hub decompresses it and stages every file — no picking files one by one. The bundle name defaults to the file's basename (sanitized to <code>[A-Za-z0-9._-]</code>) when the name field is blank. A bad archive is rejected with a <code>422</code>.</li>
             <li><strong>Canary rollout</strong> updates one node, waits for it to come back <strong>healthy</strong>, then staggers the rest across picked nodes or a group.</li>
           </ul>
+          <h3>Provenance: <code>flashed:</code> vs <code>fw</code></h3>
+          <p>The detail header shows two different things. <code>fw</code> is the running firmware's <strong>FW_VERSION</strong> read from the node's <code>code.py</code> — the version the firmware reports about itself. The muted <code>flashed: &lt;bundle&gt;</code> line (when present) is <strong>OTA provenance</strong>: the last bundle name pushed to that node (the trailing <code>@ &lt;timestamp&gt;</code> is stripped in the UI). They are independent — the bundle name is a hub-side label, not the firmware's own version — so don't read one as the other.</p>
           <h3>The safety model (four rails)</h3>
           <ol>
             <li><strong>Writable filesystem only</strong> — a node that can't write never advertises <code>ota</code>, so the hub never pushes to it.</li>
@@ -494,6 +530,7 @@ steps:
           <p>Some failures need hands-on recovery. An OTA node's <code>CIRCUITPY</code> drive is read-only over USB, so use <code>firmware/scripts/wipe-pico.sh</code> — it reaches the node over the CircuitPython REPL on the console serial port, disables the watchdog, and reformats the filesystem back to an empty, host-writable drive; then redeploy the firmware. If the REPL can't be reached, fall back to holding <strong>BOOTSEL</strong> while plugging in and dropping a fresh CircuitPython <code>.uf2</code> (or <code>flash_nuke.uf2</code>) onto <code>RPI-RP2</code>.</p>
           <div class="tags">
             <span class="endpoint"><b>GET/POST</b> /api/ota/bundles</span>
+            <span class="endpoint"><b>POST</b> /api/ota/bundles/zip</span>
             <span class="endpoint"><b>POST</b> /api/nodes/{id}/ota</span>
             <span class="endpoint"><b>GET</b> /api/nodes/{id}/ota/{job}</span>
             <span class="endpoint"><b>POST</b> /api/bulk/ota</span>
