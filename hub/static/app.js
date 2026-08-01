@@ -36,6 +36,23 @@
   }
   const $ = (id) => document.getElementById(id);
 
+  // ---- help affordance ---------------------------------------------------
+  // Small, unobtrusive "?" that deep-links into help.html at a feature anchor
+  // (opens in a new tab). Reused everywhere so the docs stay one click from every
+  // control. `label` seeds the hover tooltip and the accessible name.
+  function helpLink(anchor, label, opts) {
+    const size = (opts && opts.size) || 15;
+    return h("a", {
+      href: "help.html#" + anchor, target: "_blank", rel: "noopener",
+      "aria-label": "Help: " + (label || anchor),
+      title: (label ? label + " — " : "") + "open the docs for this feature (new tab)",
+      onClick: (e) => e.stopPropagation(),   // never trigger the control it sits on
+      style: "flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:" +
+        size + "px;height:" + size + "px;font-size:11px;line-height:1;font-weight:600;color:var(--color-neutral-600);" +
+        "border:1px solid var(--color-divider);border-radius:50%;text-decoration:none;cursor:help;user-select:none",
+    }, "?");
+  }
+
   // ---- time helpers ------------------------------------------------------
   const now = () => Date.now();
   function rel(ts) {
@@ -142,6 +159,31 @@
     const fs = (opts && opts.big) ? "11px" : "10px";
     return h("span", { title: "prompt: " + stateName,
       style: "flex:none;padding:" + pad + ";font-size:" + fs + ";font-weight:600;letter-spacing:0.02em;background:" + c.bg + ";color:" + c.fg }, stateName);
+  }
+
+  // A node is powered BY its target, so "node online" alone doesn't say the
+  // MACHINE is up. The hub derives target ∈ up|down|unknown (USB host enumerated
+  // / recent serial output). We surface it distinctly from the node dot.
+  const TARGET_BADGE = {
+    up:   { bg: "#3f9e63",              fg: "#f4fbf6", label: "machine up",   dot: "#3f9e63" },
+    down: { bg: "var(--color-accent)",  fg: "#faf8f6", label: "machine dead", dot: "var(--color-accent)" },
+  };
+  function targetBadge(target, opts) {
+    const c = TARGET_BADGE[target];
+    // unknown / absent → a hollow grey dot (compact) or nothing (big), so an
+    // old-firmware or quiet node doesn't falsely read as up or dead.
+    const big = opts && opts.big;
+    if (!c) {
+      if (big) return null;
+      return h("span", { title: "attached machine: unknown (node can't tell / old firmware)",
+        style: "flex:none;width:8px;height:8px;border-radius:50%;border:2px solid #6f6a68;box-sizing:border-box" });
+    }
+    if (big) {
+      return h("span", { title: "attached machine is " + (target === "up" ? "powered and running" : "off or hung (node still alive)"),
+        style: "flex:none;padding:2px 8px;font-size:11px;font-weight:600;letter-spacing:0.02em;background:" + c.bg + ";color:" + c.fg }, c.label);
+    }
+    return h("span", { title: c.label + " — the attached machine",
+      style: "flex:none;width:9px;height:9px;border-radius:50%;background:" + c.dot + (target === "down" ? ";animation:sc-pulse 1.4s infinite" : "") });
   }
 
   // ---- serial bridge (phase 8) -------------------------------------------
@@ -279,7 +321,18 @@
       xtermReplay();
       // Serial mode: stream keystrokes straight to the getty. HID mode leaves the
       // terminal read-only (the HID composer is the input path there).
-      ui.xterm.onData((d) => { const n = sel(); if (n && n.status === "online" && effectiveMode(n) === "serial") postSend(n.id, { data: d }); });
+      ui.xterm.onData((d) => {
+        const n = sel();
+        if (!(n && n.status === "online" && effectiveMode(n) === "serial")) return;
+        // xterm auto-answers the target's terminal queries — a cursor-position
+        // report (ESC[<row>;<col>R) for ESC[6n, a device-attributes reply
+        // (ESC[?…c) for ESC[c. Those replies come back through onData; forwarding
+        // them to the getty lands them at the shell as garbage like "168R". Strip
+        // exactly those reply shapes before sending; real keystrokes (incl. arrow
+        // keys ESC[A–D) never match, so typing is unaffected.
+        const clean = d.replace(/\x1b\[[?>=0-9;]*[Rc]/g, "");
+        if (clean) postSend(n.id, { data: clean });
+      });
     } catch (e) { disposeXterm(); rebuildConsole(); }
   }
   // Single entry point used everywhere the console must (re)draw for the current
@@ -344,8 +397,14 @@
   }
 
   function renderNav() {
+    const NAV_TIP = { nodes: "Live node list, serial console and input composer", macros: "Reusable HID sequences replayed on any node",
+      runbooks: "YAML expect flows run across a node group", events: "Hub journal and command audit", settings: "Hub configuration, safety toggles, alerts" };
     const links = [["nodes", "Nodes"], ["macros", "Macros"], ["runbooks", "Runbooks"], ["events", "Events"], ["settings", "Settings"]].map(([k, label]) =>
-      h("a", { "aria-current": state.view === k ? "page" : null, onClick: (e) => { e.preventDefault(); switchView(k); } }, label));
+      h("a", { "aria-current": state.view === k ? "page" : null, title: NAV_TIP[k], onClick: (e) => { e.preventDefault(); switchView(k); } }, label));
+    // Help opens the in-app docs in a new tab (not a view switch).
+    links.push(h("a", { href: "help.html", target: "_blank", rel: "noopener", title: "Open the full in-app help & operator docs (new tab)",
+      style: "display:inline-flex;align-items:center;gap:5px" }, "Help",
+      h("span", { "aria-hidden": "true", style: "display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;font-size:11px;font-weight:600;border:1px solid var(--color-divider);border-radius:50%;color:var(--color-neutral-600)" }, "?")));
     const wsColor = state.ws === "live" ? "#3f9e63" : state.ws === "connecting" ? "#c98a00" : "#c94b39";
     const wsLabel = state.ws === "live" ? "WS live" : state.ws === "connecting" ? "connecting…" : "offline";
     const showToggles = state.view === "nodes";
@@ -357,11 +416,11 @@
         h("span", { style: "width:12px;height:12px;background:var(--color-accent);display:block" }), "SWARM CONTROL"),
       ...links,
       h("div", { style: "display:flex;align-items:center;gap:var(--space-4);margin-left:auto;flex:none;white-space:nowrap" },
-        showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", onClick: () => { state.leftOpen = !state.leftOpen; renderView(); } }, state.leftOpen ? "‹ Nodes" : "› Nodes") : null,
-        showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", onClick: () => { state.rightOpen = !state.rightOpen; renderView(); } }, state.rightOpen ? "Activity ›" : "Activity ‹") : null,
+        showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Show/hide the node list rail", onClick: () => { state.leftOpen = !state.leftOpen; renderView(); } }, state.leftOpen ? "‹ Nodes" : "› Nodes") : null,
+        showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Show/hide the command history & events rail", onClick: () => { state.rightOpen = !state.rightOpen; renderView(); } }, state.rightOpen ? "Activity ›" : "Activity ‹") : null,
         stat("Fleet", state.hub.nodes_online + " / " + state.hub.nodes_total + " online"),
         stat("Hub uptime", uptimeStr(state.hub.uptime_ms)),
-        h("div", { style: "display:flex;align-items:center;gap:7px;border:1px solid var(--color-divider);padding:5px 10px" },
+        h("div", { title: "Live update channel to the hub (green live · amber connecting · red offline / demo)", style: "display:flex;align-items:center;gap:7px;border:1px solid var(--color-divider);padding:5px 10px" },
           h("span", { style: "width:8px;height:8px;border-radius:50%;display:block;background:" + wsColor }),
           h("span", { style: "font-size:12px;font-weight:600" }, wsLabel))));
   }
@@ -402,15 +461,15 @@
   }
 
   function buildLeftRail() {
-    const filter = h("input", { class: "input", placeholder: "Filter by id, label, group…", value: state.query,
+    const filter = h("input", { class: "input", placeholder: "Filter by id, label, group…", title: "Filter the list by node id, label, group or IP (client-side)", value: state.query,
       onInput: (e) => { state.query = e.target.value; renderNodeList(); } });
-    const seg = h("div", { class: "seg", style: "align-self:flex-start" },
-      ...["all", "online", "offline"].map((f) => h("label", { class: "seg-opt" },
+    const seg = h("div", { class: "seg", style: "align-self:flex-start", title: "Show all nodes, or only online / offline" },
+      ...["all", "online", "offline"].map((f) => h("label", { class: "seg-opt", title: "Show " + f + " nodes" },
         h("input", { type: "radio", name: "statusf", checked: state.statusFilter === f, onChange: () => { state.statusFilter = f; renderNodeList(); } }), f)));
     ui.nodeList = h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" });
     return h("div", { style: "flex:none;width:304px;display:flex;flex-direction:column;border-right:2px solid var(--color-divider);min-height:0" },
       h("div", { style: "flex:none;padding:var(--space-3);display:flex;flex-direction:column;gap:var(--space-2);border-bottom:2px solid var(--color-divider)" },
-        h("h6", { style: "margin:0" }, "Nodes"), filter, seg),
+        h("div", { style: "display:flex;align-items:center;gap:6px" }, h("h6", { style: "margin:0" }, "Nodes"), helpLink("nodes", "Nodes & the node list")), filter, seg),
       ui.nodeList,
       h("div", { style: "flex:none;padding:var(--space-2) var(--space-3);border-top:2px solid var(--color-divider);font-size:11px;color:var(--color-neutral-600)" },
         "Swarm TCP :" + state.hub.swarm_port + " · Browser :" + state.hub.web_port + " · mgmt VLAN"));
@@ -428,13 +487,15 @@
     ui.nodeList.innerHTML = "";
     for (const n of visible) {
       const on = n.status === "online", isSel = n.id === state.selId;
-      const row = h("div", { class: "sc-row", style: "cursor:pointer;padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--color-divider);border-left:" +
+      const row = h("div", { class: "sc-row", title: "Select " + n.id + (n.label ? " (" + n.label + ")" : "") + " — " + (on ? "online" : "offline") + "; opens its serial console",
+        style: "cursor:pointer;padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--color-divider);border-left:" +
           (isSel ? "3px solid var(--color-accent)" : "3px solid transparent") + ";background:" + (isSel ? "var(--color-surface)" : "transparent") + ";opacity:" + (on ? 1 : 0.55),
         onClick: () => selectNode(n.id) },
         h("div", { style: "display:flex;align-items:center;gap:8px" },
           h("span", { style: "width:9px;height:9px;border-radius:50%;flex:none;background:" + (on ? "#3f9e63" : "transparent") + ";border:" + (on ? "none" : "2px solid #8c8683") + ";animation:" + (n.inflight > 0 ? "sc-pulse 1s infinite" : "none") }),
           h("span", { style: "font-family:ui-monospace,Menlo,monospace;font-size:13px;font-weight:600" }, n.id),
           h("span", { style: "font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-neutral-700)" }, n.label),
+          (on ? targetBadge(n.target) : null),
           (on ? promptBadge(n.promptState) : null),
           h("span", { style: "margin-left:auto;font-size:11px;color:var(--color-neutral-600);flex:none" }, rel(n.lastSeen))),
         h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:4px;padding-left:17px" },
@@ -454,12 +515,12 @@
 
     ui.lineCount = h("span", { style: "font-size:11px;color:var(--color-neutral-600)" }, "0 lines buffered");
     const termBar = h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-2);padding:6px var(--space-4);background:var(--color-surface);border-bottom:1px solid var(--color-divider)" },
-      h("h6", { style: "margin:0;font-size:11px" }, "Serial console"), ui.lineCount,
+      h("h6", { style: "margin:0;font-size:11px" }, "Serial console"), helpLink("console", "The serial console"), ui.lineCount,
       h("div", { style: "margin-left:auto;display:flex;gap:var(--space-1)" },
-        (ui.autoBtn = h("button", { class: "btn btn-ghost", style: "font-size:12px", onClick: toggleAutoscroll }, state.autoscroll ? "Autoscroll on" : "Autoscroll off")),
-        (ui.wrapBtn = h("button", { class: "btn btn-ghost", style: "font-size:12px", onClick: toggleWrap }, state.wrap ? "Wrap on" : "Wrap off")),
-        h("button", { class: "btn btn-ghost", style: "font-size:12px", onClick: clearConsole }, "Clear"),
-        h("button", { class: "btn btn-ghost", style: "font-size:12px", onClick: downloadLog }, "Download log")));
+        (ui.autoBtn = h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Follow the live tail (auto-disables when you scroll up to read back)", onClick: toggleAutoscroll }, state.autoscroll ? "Autoscroll on" : "Autoscroll off")),
+        (ui.wrapBtn = h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Soft-wrap long lines vs. horizontal scroll", onClick: toggleWrap }, state.wrap ? "Wrap on" : "Wrap off")),
+        h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Clear the on-screen buffer for this node only (hub-stored output is untouched)", onClick: clearConsole }, "Clear"),
+        h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Download this node's full stored serial output as a text file", onClick: downloadLog }, "Download log")));
 
     ui.term = h("div", { class: "sc-term", style: "flex:1;min-height:0;overflow-y:auto;background:#1b1918;padding:var(--space-3) var(--space-4);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px;line-height:1.6",
       onScroll: (e) => { const el = e.target; const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 24; if (atEnd !== state.autoscroll) { state.autoscroll = atEnd; if (ui.autoBtn) ui.autoBtn.textContent = atEnd ? "Autoscroll on" : "Autoscroll off"; } } });
@@ -500,7 +561,8 @@
       h("div", { style: "display:flex;align-items:baseline;gap:10px;min-width:0" },
         h("h3", { style: "margin:0;font-family:ui-monospace,Menlo,monospace" }, s.id || "—"),
         h("span", { style: "font-size:14px;color:var(--color-neutral-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" }, s.label || ""),
-        h("span", { class: "tag " + (online ? "tag-accent" : "tag-neutral") }, online ? "online" : "offline"),
+        h("span", { class: "tag " + (online ? "tag-accent" : "tag-neutral"), title: "node (Pico) link status" }, online ? "online" : "offline"),
+        (online ? targetBadge(s.target, { big: true }) : null),
         (online ? promptBadge(s.promptState, { big: true }) : null)),
       h("div", { style: "display:flex;flex-wrap:wrap;gap:2px var(--space-4);font-size:12px;color:var(--color-neutral-700);font-family:ui-monospace,Menlo,monospace;overflow:hidden" },
         h("span", {}, s.ip || ""), h("span", {}, "fw " + (s.fw || "")), h("span", {}, "rtt " + (online ? (s.rttMs != null ? s.rttMs + "ms" : "—") : "—")),
@@ -511,14 +573,21 @@
           : null))));
     const hasNode = !!s.id;
     host.appendChild(h("div", { style: "flex:none;margin-left:auto;display:flex;align-items:center;gap:var(--space-2);padding:6px var(--space-4);flex-wrap:wrap;justify-content:flex-end" },
-      h("button", { class: "btn btn-secondary", onClick: doPing }, "Ping"),
-      h("button", { class: "btn btn-secondary", onClick: doRead }, "Read serial"),
-      h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openExpectBuilder(s.id) }, "Expect"),      // phase 5
-      h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openQueueSheet(s.id) }, "Queue"),         // phase 6
-      h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openReplay(s.id) }, "Replay"),            // phase 7
-      h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openBridgeSheet(s.id) }, "Bridge"),       // phase 8
-      (nodeHasOta(s) ? h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openOtaSheet(s.id) }, "Firmware") : null),  // phase 12
-      h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", onClick: doRebootNode }, "Reboot node")));
+      h("button", { class: "btn btn-secondary", title: "Round-trip the node and refresh its RTT", onClick: doPing }, "Ping"),
+      h("button", { class: "btn btn-secondary", title: "Ask the node to flush its serial receive buffer to the hub", onClick: doRead }, "Read serial"),
+      helpLink("ping-read-reboot", "Ping · Read · Reboot"),
+      h("button", { class: "btn btn-secondary", title: "Build a wait-for-output expect job (login flows, guided steps)", disabled: !hasNode, onClick: () => openExpectBuilder(s.id) }, "Expect"),      // phase 5
+      helpLink("expect", "Expect engine"),
+      h("button", { class: "btn btn-secondary", title: "Stage commands to deliver when this node next connects", disabled: !hasNode, onClick: () => openQueueSheet(s.id) }, "Queue"),         // phase 6
+      helpLink("offline-queue", "Offline command queue"),
+      h("button", { class: "btn btn-secondary", title: "Replay this node's recorded serial session (asciicast)", disabled: !hasNode, onClick: () => openReplay(s.id) }, "Replay"),            // phase 7
+      helpLink("session-recording", "Session recording & replay"),
+      h("button", { class: "btn btn-secondary", title: "Expose this node's raw serial as a TCP port (minicom/PuTTY)", disabled: !hasNode, onClick: () => openBridgeSheet(s.id) }, "Bridge"),       // phase 8
+      helpLink("serial-bridge", "Raw serial bridge"),
+      (nodeHasOta(s) ? h("button", { class: "btn btn-secondary", title: "Push a firmware bundle to this node (chunked, checksummed, auto-revert)", disabled: !hasNode, onClick: () => openOtaSheet(s.id) }, "Firmware") : null),  // phase 12
+      (nodeHasOta(s) ? helpLink("ota", "OTA firmware updates") : null),
+      h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", title: "Reboot the Pico node (NOT the target machine) — drops its socket briefly", onClick: doRebootNode }, "Reboot node"),
+      helpLink("ping-read-reboot", "Reboot node")));
   }
 
   const kicker = (t) => h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);width:52px;flex:none" }, t);
@@ -559,29 +628,33 @@
         : (wantsSerial && !serialOk
             ? "Serial unavailable — firmware lacks serial_tx; using HID"
             : "HID keystrokes → keyboard console (tty1 / BIOS / GRUB)"));
-    return h("div", { style: "display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap" }, kicker("Input"), seg, note);
+    return h("div", { style: "display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap" }, kicker("Input"), seg, helpLink("input-modes", "Input modes: HID vs Serial"), note);
   }
 
   function buildHidComposer(disabled) {
     ui.composerInput = h("input", { class: "input", style: "flex:1;font-family:ui-monospace,Menlo,monospace", value: state.input, disabled,
+      title: "HID mode: types this text as USB keystrokes onto the target's keyboard console (tty1 / BIOS / GRUB). Enter to send.",
       placeholder: disabled ? "node offline — commands will fail" : "type into " + (state.selId || "node") + " serial…",
       onInput: (e) => { state.input = e.target.value; }, onKeyDown: (e) => { if (e.key === "Enter" && state.input.trim()) sendText(); } });
+    const KEY_TIP = { "Enter": "Press Enter", "Tab": "Press Tab (completion)", "ESC": "Press Escape", "↑": "Up arrow", "↓": "Down arrow", "DEL": "Delete", "F2": "F2 (often BIOS setup)", "F12": "F12 (often boot menu)" };
     const keys = ["Enter", "Tab", "ESC", "↑", "↓", "DEL", "F2", "F12"].map((k) =>
-      h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", disabled, onClick: () => sendKey(k) }, k));
+      h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", title: (KEY_TIP[k] || k) + " — sent as an HID key", disabled, onClick: () => sendKey(k) }, k));
+    const CHORD_TIP = { "CTRL+C": "Interrupt (SIGINT) on tty1", "CTRL+D": "EOF / logout on tty1", "CTRL+ALT+DEL": "⚠ Reboots the target machine (confirm prompt when enabled)",
+      "CTRL+ALT+F2": "Switch to virtual terminal 2", "ALT+SysRq+B": "⚠ Immediate SysRq reboot — no clean shutdown" };
     const chords = [["CTRL+C", "inherit"], ["CTRL+D", "inherit"], ["CTRL+ALT+DEL", "var(--color-accent-700)"], ["CTRL+ALT+F2", "inherit"], ["ALT+SysRq+B", "var(--color-accent-700)"]]
-      .map(([label, color]) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px;color:" + color, disabled, onClick: () => sendChord(label) }, label));
-    const macros = state.macros.slice(0, 4).map((m) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", disabled, onClick: () => runMacroOn(m.id, state.selId) }, m.name));
+      .map(([label, color]) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px;color:" + color, title: CHORD_TIP[label] || label, disabled, onClick: () => sendChord(label) }, label));
+    const macros = state.macros.slice(0, 4).map((m) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px", title: "Run macro “" + m.name + "” on " + (state.selId || "this node"), disabled, onClick: () => runMacroOn(m.id, state.selId) }, m.name));
     return [
       h("div", { style: "display:flex;gap:var(--space-2)" }, ui.composerInput,
-        h("button", { class: "btn btn-primary", disabled, onClick: sendText }, "Send")),
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Keys"), ...keys,
-        h("label", { style: "margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--color-neutral-700)" },
+        h("button", { class: "btn btn-primary", title: "Type the text above onto the target as HID keystrokes", disabled, onClick: sendText }, "Send")),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Keys"), helpLink("control-bytes", "Keys & chords"), ...keys,
+        h("label", { title: "Append a newline after the typed text (i.e. press Enter)", style: "margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--color-neutral-700)" },
           h("input", { type: "checkbox", checked: state.sendNewline, style: "accent-color:var(--color-accent)", onChange: (e) => { state.sendNewline = e.target.checked; } }), "append ⏎"),
-        h("label", { style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, "char delay",
-          h("input", { class: "input", type: "number", min: "0", step: "5", value: state.charDelay, style: "width:64px;min-height:28px;padding:2px 6px",
+        h("label", { title: "Per-character delay in ms — raise it for a target that drops fast keystrokes", style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, "char delay",
+          h("input", { class: "input", type: "number", min: "0", step: "5", value: state.charDelay, title: "Per-character HID delay (ms)", style: "width:64px;min-height:28px;padding:2px 6px",
             onChange: (e) => { state.charDelay = Number(e.target.value) || 0; } }), "ms")),
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Chords"), ...chords),
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Macros"), ...macros),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Chords"), helpLink("control-bytes", "Control keys & chords"), ...chords),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Macros"), helpLink("macros", "Macros"), ...macros),
     ];
   }
 
@@ -590,32 +663,34 @@
     // the getty (no local echo — the getty echoes back through `output`). The
     // field itself stays empty.
     ui.composerInput = h("input", { class: "input", style: "flex:1;font-family:ui-monospace,Menlo,monospace", value: "", disabled,
+      title: "Serial mode: keystrokes stream straight into the target's serial getty. No local echo — the getty echoes back in the console.",
       placeholder: disabled ? "node offline — serial disabled" : "serial: keystrokes stream live to " + (state.selId || "node") + " (no local echo)",
       onKeyDown: serialKeydown, onPaste: serialPaste });
-    const ctl = (label, fn, color) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px" + (color ? ";color:" + color : ""), disabled, onClick: fn }, label);
+    const ctl = (label, fn, color, tip) => h("button", { class: "btn btn-secondary", style: "padding:3px 9px;font-size:12px" + (color ? ";color:" + color : ""), title: tip || label, disabled, onClick: fn }, label);
     const controls = [
-      ctl("⏎ Enter", () => serialEnter()),
-      ctl("⌫ Bksp", () => serialSendRaw("7f")),
-      ctl("⇥ Tab", () => serialSendData("\t")),
-      ctl("Esc", () => serialSendRaw("1b")),
-      ctl("Ctrl-C", () => serialSendRaw("03"), "var(--color-accent-700)"),
-      ctl("Ctrl-D", () => serialSendRaw("04"), "var(--color-accent-700)"),
-      ctl("Ctrl-Z", () => serialSendRaw("1a"), "var(--color-accent-700)"),
+      ctl("⏎ Enter", () => serialEnter(), null, "Send a carriage return (0d) — the getty expects CR"),
+      ctl("⌫ Bksp", () => serialSendRaw("7f"), null, "Backspace / delete (raw 7f)"),
+      ctl("⇥ Tab", () => serialSendData("\t"), null, "Tab (09) — shell completion"),
+      ctl("Esc", () => serialSendRaw("1b"), null, "Escape (raw 1b)"),
+      ctl("Ctrl-C", () => serialSendRaw("03"), "var(--color-accent-700)", "Interrupt the running command (raw 03)"),
+      ctl("Ctrl-D", () => serialSendRaw("04"), "var(--color-accent-700)", "EOF / logout (raw 04)"),
+      ctl("Ctrl-Z", () => serialSendRaw("1a"), "var(--color-accent-700)", "Suspend to background (raw 1a)"),
     ];
     return [
       h("div", { style: "display:flex;gap:var(--space-2)" }, ui.composerInput,
-        h("button", { class: "btn btn-primary", disabled, onClick: () => serialEnter() }, "Enter")),
-      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Serial"), ...controls),
+        h("button", { class: "btn btn-primary", title: "Send a carriage return (0d) to the serial getty", disabled, onClick: () => serialEnter() }, "Enter")),
+      h("div", { style: "display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap" }, kicker("Serial"), helpLink("control-bytes", "Serial control bytes"), ...controls),
     ];
   }
 
   function buildRightRail() {
-    const seg = h("div", { class: "seg", style: "margin:var(--space-3);align-self:flex-start" },
-      h("label", { class: "seg-opt" }, h("input", { type: "radio", name: "railtab", checked: state.tab === "history", onChange: () => { state.tab = "history"; renderRail(); } }), "Command history"),
-      h("label", { class: "seg-opt" }, h("input", { type: "radio", name: "railtab", checked: state.tab === "events", onChange: () => { state.tab = "events"; renderRail(); } }), "Events"));
+    const seg = h("div", { class: "seg", style: "margin:var(--space-3) 0 var(--space-3) var(--space-3);align-self:flex-start" },
+      h("label", { class: "seg-opt", title: "Every command sent to a node and its outcome" }, h("input", { type: "radio", name: "railtab", checked: state.tab === "history", onChange: () => { state.tab = "history"; renderRail(); } }), "Command history"),
+      h("label", { class: "seg-opt", title: "Live hub events — registrations, heartbeats, failures" }, h("input", { type: "radio", name: "railtab", checked: state.tab === "events", onChange: () => { state.tab = "events"; renderRail(); } }), "Events"));
     ui.rail = h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0;border-top:2px solid var(--color-divider)" });
     setTimeout(renderRail, 0);
-    return h("div", { style: "flex:none;width:324px;display:flex;flex-direction:column;border-left:2px solid var(--color-divider);min-height:0" }, seg, ui.rail);
+    return h("div", { style: "flex:none;width:324px;display:flex;flex-direction:column;border-left:2px solid var(--color-divider);min-height:0" },
+      h("div", { style: "display:flex;align-items:center;gap:8px" }, seg, helpLink("events", "Events & command audit")), ui.rail);
   }
 
   function renderRail() {
@@ -631,7 +706,7 @@
           h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:3px" },
             h("span", { style: "font-size:11px;color:var(--color-neutral-600);font-family:ui-monospace,Menlo,monospace" }, c.id + " · " + c.nodeId),
             h("span", { style: "font-size:11px;color:var(--color-neutral-600)" }, rel(c.ts)),
-            h("button", { class: "btn btn-ghost", style: "margin-left:auto;font-size:11px;padding:1px 4px", onClick: () => { selectNode(c.nodeId); sendRaw(c.text, "text"); } }, "Re-run"))));
+            h("button", { class: "btn btn-ghost", style: "margin-left:auto;font-size:11px;padding:1px 4px", title: "Re-send this command to " + c.nodeId, onClick: () => { selectNode(c.nodeId); sendRaw(c.text, "text"); } }, "Re-run"))));
       }
       if (!state.history.length) ui.rail.appendChild(empty("No commands yet."));
     } else {
@@ -669,13 +744,13 @@
         h("td", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px" }, (m.steps || []).length + " steps"),
         h("td", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px" }, (m.runs || 0) + " runs"),
         h("td", { style: "font-size:12px;color:var(--color-neutral-700)" }, m.lastRun ? rel(m.lastRun) : "—"),
-        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", onClick: (e) => { e.stopPropagation(); runMacroOn(m.id, state.selId); } }, "Run"))));
+        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", title: "Run “" + m.name + "” on the selected node (" + (state.selId || "none") + ")", onClick: (e) => { e.stopPropagation(); runMacroOn(m.id, state.selId); } }, "Run"))));
     }
     const left = h("div", { style: "flex:1 1 auto;min-width:0;display:flex;flex-direction:column;min-height:0;border-right:2px solid var(--color-divider)" },
       h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider)" },
-        h("h4", { style: "margin:0" }, "Macros"),
+        h("h4", { style: "margin:0" }, "Macros"), helpLink("macros", "Macros"),
         h("span", { style: "font-size:12px;color:var(--color-neutral-600)" }, "stored on the hub · replayed as HID + serial steps"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", onClick: () => openMacroEditor(null) }, "New macro")),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", title: "Create a new reusable macro", onClick: () => openMacroEditor(null) }, "New macro")),
       state.macros.length
         ? h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
             h("table", { class: "table", style: "width:100%" },
@@ -701,9 +776,9 @@
         h("span", { class: "tag tag-outline", style: "padding:1px 7px;margin-top:6px;display:inline-block" }, m ? (m.group || "—") : "—")),
       stepList,
       h("div", { style: "flex:none;padding:var(--space-3) var(--space-4);border-top:2px solid var(--color-divider);display:flex;gap:var(--space-2)" },
-        h("button", { class: "btn btn-secondary", disabled: !m, onClick: () => m && openMacroEditor(m) }, "Edit"),
-        h("button", { class: "btn btn-ghost", disabled: !m, style: "color:var(--color-accent)", onClick: () => m && deleteMacroById(m.id, m.name) }, "Delete"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !m || !state.selId, onClick: () => m && runMacroOn(m.id, state.selId) }, "Run on " + (state.selId || "—"))));
+        h("button", { class: "btn btn-secondary", disabled: !m, title: "Edit this macro's steps", onClick: () => m && openMacroEditor(m) }, "Edit"),
+        h("button", { class: "btn btn-ghost", disabled: !m, style: "color:var(--color-accent)", title: "Delete this macro (confirms first)", onClick: () => m && deleteMacroById(m.id, m.name) }, "Delete"),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !m || !state.selId, title: "Replay this macro on the selected node", onClick: () => m && runMacroOn(m.id, state.selId) }, "Run on " + (state.selId || "—"))));
     return h("div", { style: "flex:1;display:flex;min-height:0" }, left, right);
   }
 
@@ -833,7 +908,7 @@
       h("div", { class: "dialog-actions" },
         (draft.id != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: () => { const nm = draft.name; closeMacroEditor(); deleteMacroById(draft.id, nm); } }, "Delete") : null),
         h("button", { class: "btn btn-secondary", onClick: closeMacroEditor }, "Cancel"),
-        h("button", { class: "btn btn-primary", onClick: save }, draft.id == null ? "Create macro" : "Save changes")));
+        h("button", { class: "btn btn-primary", title: "Save this macro on the hub", onClick: save }, draft.id == null ? "Create macro" : "Save changes")));
 
     const backdrop = h("div", { id: "macro-editor", class: "dialog-backdrop", style: "z-index:120", onClick: closeMacroEditor }, card);
     document.body.appendChild(backdrop);
@@ -868,9 +943,9 @@
     const head = (cols) => h("thead", {}, h("tr", {}, ...cols.map((t) => h("th", {}, t))));
     return h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
       h("div", { style: "padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;gap:var(--space-3)" },
-        h("div", {}, h("h4", { style: "margin:0" }, "Events"),
+        h("div", {}, h("div", { style: "display:flex;align-items:center;gap:8px" }, h("h4", { style: "margin:0" }, "Events"), helpLink("events", "Events & audit")),
           h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "hub journal — registrations, heartbeats, stale sweeps and failures")),
-        h("a", { class: "btn btn-secondary", style: "margin-left:auto;flex:none", href: "/api/events/export", target: "_blank" }, "Export CSV")),
+        h("a", { class: "btn btn-secondary", style: "margin-left:auto;flex:none", title: "Download the full event log as CSV", href: "/api/events/export", target: "_blank" }, "Export CSV")),
       h("table", { class: "table", style: "width:100%" }, head(["Time", "Age", "Type", "Node", "Detail"]), evRows),
       h("div", { style: "padding:var(--space-3) var(--space-4);border-top:2px solid var(--color-divider);border-bottom:2px solid var(--color-divider)" },
         h("h4", { style: "margin:0" }, "Command audit"),
@@ -905,7 +980,8 @@
       ["alerts_enabled", "Alerts", "Notify on node down / panic via webhook or ntfy"],
     ];
     const toggleWrap = h("div", { style: "padding:var(--space-3) var(--space-4)" },
-      h("div", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:var(--space-2)" }, "Safety"));
+      h("div", { style: "display:flex;align-items:center;gap:6px;margin-bottom:var(--space-2)" },
+        h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600)" }, "Safety"), helpLink("settings", "Safety toggles")));
     for (const [key, label, hint] of toggles) {
       toggleWrap.appendChild(h("label", { style: "display:flex;gap:12px;align-items:flex-start;padding:var(--space-2) 0;border-bottom:1px solid var(--color-divider);cursor:pointer" },
         h("input", { type: "checkbox", checked: !!s[key], style: "accent-color:var(--color-accent);margin-top:3px;flex:none", onChange: (e) => { edited[key] = e.target.checked; } }),
@@ -917,7 +993,8 @@
     edited.alerts_webhook_url = s.alerts_webhook_url || "";
     edited.alerts_ntfy_url = s.alerts_ntfy_url || "";
     const alertsBlock = h("div", { style: "padding:var(--space-3) var(--space-4);border-top:1px solid var(--color-divider)" },
-      h("div", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:var(--space-2)" }, "Alert endpoints"),
+      h("div", { style: "display:flex;align-items:center;gap:6px;margin-bottom:var(--space-2)" },
+        h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600)" }, "Alert endpoints"), helpLink("alerts", "Alerts")),
       h("div", { class: "field", style: "margin-bottom:var(--space-3)" },
         h("label", {}, "Webhook URL (POST JSON)"),
         h("input", { class: "input", type: "text", value: edited.alerts_webhook_url, placeholder: "https://…", onInput: (e) => { edited.alerts_webhook_url = e.target.value; } })),
@@ -926,9 +1003,9 @@
         h("input", { class: "input", type: "text", value: edited.alerts_ntfy_url, placeholder: "https://ntfy.sh/your-topic", onInput: (e) => { edited.alerts_ntfy_url = e.target.value; } })));
     return h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
       h("div", { style: "padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;gap:var(--space-3)" },
-        h("div", { style: "min-width:0" }, h("h4", { style: "margin:0" }, "Settings"),
+        h("div", { style: "min-width:0" }, h("div", { style: "display:flex;align-items:center;gap:8px" }, h("h4", { style: "margin:0" }, "Settings"), helpLink("settings", "Settings")),
           h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "hub configuration — live values apply immediately; port changes need a restart")),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", onClick: () => saveSettings(edited) }, "Save config")),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", title: "Write the changed settings to the hub (PATCH /api/settings)", onClick: () => saveSettings(edited) }, "Save config")),
       grid, toggleWrap, alertsBlock);
   }
 
@@ -1220,7 +1297,7 @@
     const delMs = h("input", { class: "input", type: "number", min: "0", step: "100", value: "500", style: "width:96px" });
 
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
-      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Ordered steps run on ", h("b", {}, nodeId), " — actions alternate with wait-for matches on the node's live output."),
+      h("div", { style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, h("span", {}, "Ordered steps run on "), h("b", {}, nodeId), h("span", {}, " — actions alternate with wait-for matches on the node's live output."), helpLink("expect", "Expect engine")),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Steps"), listHost),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
         kicker("Send"), sendTxt, h("button", { class: "btn btn-secondary", onClick: addSend }, "Add send")),
@@ -1243,7 +1320,7 @@
     }
     openSheet("expect-sheet", "Expect — " + nodeId, body,
       [h("button", { class: "btn btn-secondary", onClick: () => closeSheet("expect-sheet") }, "Cancel"),
-       h("button", { class: "btn btn-primary", onClick: run }, "Run expect")]);
+       h("button", { class: "btn btn-primary", title: "Start the expect job on " + nodeId + " (one running job per node)", onClick: run }, "Run expect")]);
     renderList();
   }
   function runExpectDemo(nodeId, steps) {
@@ -1295,11 +1372,11 @@
     }
     const online = (sel() || {}).status === "online";
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
-      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, online ? "Node is online — queued commands drain immediately on submit." : "Node is offline — commands are held and delivered when it reconnects."),
+      h("div", { style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, h("span", {}, online ? "Node is online — queued commands drain immediately on submit." : "Node is offline — commands are held and delivered when it reconnects."), helpLink("offline-queue", "Offline command queue")),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Pending"), listHost),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
-        kicker("Add"), cmdTxt, h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:5px" }, "ttl", ttlMin, "min"),
-        h("button", { class: "btn btn-secondary", onClick: add }, "Queue")));
+        kicker("Add"), cmdTxt, h("label", { title: "Time-to-live in minutes (0 = never expires)", style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:5px" }, "ttl", ttlMin, "min"),
+        h("button", { class: "btn btn-secondary", title: "Enqueue this command for delivery on connect", onClick: add }, "Queue")));
     openSheet("queue-sheet", "Offline queue — " + nodeId, body,
       [h("button", { class: "btn btn-primary", onClick: () => closeSheet("queue-sheet") }, "Done")], 600);
     refreshList();
@@ -1358,11 +1435,11 @@
       catch (e) { toast("Failed", "bridge remove error"); }
     }
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
-      info,
+      h("div", { style: "display:flex;align-items:center;gap:6px" }, info, helpLink("serial-bridge", "Raw serial bridge")),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" }, kicker("Port"), portInput,
-        h("button", { class: "btn btn-secondary", onClick: assign }, cur != null ? "Reassign" : "Assign")));
+        h("button", { class: "btn btn-secondary", title: "Expose this node's raw serial on the chosen TCP port (1024-65535)", onClick: assign }, cur != null ? "Reassign" : "Assign")));
     openSheet("bridge-sheet", "Serial bridge — " + nodeId, body,
-      [cur != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: unassign }, "Unassign") : null,
+      [cur != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", title: "Remove this node's bridge port assignment", onClick: unassign }, "Unassign") : null,
        h("button", { class: "btn btn-primary", onClick: () => closeSheet("bridge-sheet") }, "Done")], 560);
   }
 
@@ -1449,7 +1526,7 @@
     let picked = null;
     const listHost = h("div", { class: "sc-scroll", style: "max-height:200px;overflow-y:auto;border:1px solid var(--color-divider)" });
     const progressHost = h("div", {});
-    const updateBtn = h("button", { class: "btn btn-primary", onClick: () => run() }, "Update firmware");
+    const updateBtn = h("button", { class: "btn btn-primary", title: "Flash the selected bundle to " + nodeId + " — it reboots and must report healthy to confirm", onClick: () => run() }, "Update firmware");
 
     function renderProgress() {
       progressHost.innerHTML = "";
@@ -1488,13 +1565,13 @@
     }
 
     const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
-      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Push a firmware bundle to ", h("b", {}, nodeId),
-        ". The Pico flashes, reboots and must report ", h("b", {}, "healthy"), " to confirm; a canary rollout can update a whole group."),
+      h("div", { style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, h("span", {}, "Push a firmware bundle to "), h("b", {}, nodeId),
+        h("span", {}, ". The Pico flashes, reboots and must report "), h("b", {}, "healthy"), h("span", {}, " to confirm; a canary rollout can update a whole group."), helpLink("ota", "OTA firmware updates")),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Bundle"), listHost),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Progress"), progressHost));
 
     openSheet("ota-sheet", "Update firmware — " + nodeId, body,
-      [h("button", { class: "btn btn-ghost", style: "margin-right:auto", onClick: () => openBundleManager() }, "Manage bundles…"),
+      [h("button", { class: "btn btn-ghost", style: "margin-right:auto", title: "Create, view and roll out firmware bundles", onClick: () => openBundleManager() }, "Manage bundles…"),
        h("button", { class: "btn btn-secondary", onClick: () => closeOtaSheet() }, "Close"),
        updateBtn]);
     // Wire the backdrop close (openSheet's own onClick) to also drop the hook.
@@ -1613,14 +1690,14 @@
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
         kicker("New"), nameInput),
       h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
-        kicker("Files"), fileInput, h("button", { class: "btn btn-secondary", onClick: create }, "Create bundle")),
+        kicker("Files"), fileInput, h("button", { class: "btn btn-secondary", title: "Read the chosen files in-browser and store them as a firmware bundle", onClick: create }, "Create bundle")),
       h("div", { style: "font-size:11px;color:var(--color-neutral-600);line-height:1.5" }, "Files are read in the browser and base64-encoded into the bundle manifest on the hub."),
       h("div", { style: "border-top:1px solid var(--color-divider)" }),
       h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, h("b", {}, "Canary rollout"), " — updates one node, waits for it to come back ", h("b", {}, "healthy"), ", then staggers the rest. Follow each node's progress bar in its console."),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Bundle"), rollBundleHost),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Target"), targetSeg, targetHost),
       h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:6px" }, "stagger", stagger, "ms between nodes"),
-      h("div", { style: "display:flex" }, h("button", { class: "btn btn-primary", style: "margin-left:auto", onClick: rollout }, "Start rollout")));
+      h("div", { style: "display:flex;align-items:center;gap:8px;justify-content:flex-end" }, helpLink("ota", "Canary rollout"), h("button", { class: "btn btn-primary", title: "Canary rollout: update one node, wait for healthy, then stagger the rest", onClick: rollout }, "Start rollout")));
 
     openSheet("bundle-manager", "Firmware bundles", body,
       [h("button", { class: "btn btn-primary", onClick: () => closeSheet("bundle-manager") }, "Done")], 720);
@@ -1673,13 +1750,13 @@
         onClick: () => { state.selRunbook = rb.id; renderView(); } },
         h("td", { style: "font-weight:600" }, rb.name),
         h("td", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px" }, (rb.yaml || "").split("\n").filter((l) => /^\s*-/.test(l)).length + " steps"),
-        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", onClick: (e) => { e.stopPropagation(); openRunbookRun(rb); } }, "Run"))));
+        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", title: "Run “" + rb.name + "” across chosen nodes or a group", onClick: (e) => { e.stopPropagation(); openRunbookRun(rb); } }, "Run"))));
     }
     const left = h("div", { style: "flex:1 1 auto;min-width:0;display:flex;flex-direction:column;min-height:0;border-right:2px solid var(--color-divider)" },
       h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider)" },
-        h("h4", { style: "margin:0" }, "Runbooks"),
+        h("h4", { style: "margin:0" }, "Runbooks"), helpLink("runbooks", "Runbooks"),
         h("span", { style: "font-size:12px;color:var(--color-neutral-600)" }, "YAML expect flows, run across nodes or a group"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", onClick: () => openRunbookEditor(null) }, "New runbook")),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", title: "Create a new YAML runbook", onClick: () => openRunbookEditor(null) }, "New runbook")),
       state.runbooks.length
         ? h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
             h("table", { class: "table", style: "width:100%" },
@@ -1716,9 +1793,9 @@
         h("h5", { style: "margin:2px 0 0" }, "Live progress")),
       runsHost,
       h("div", { style: "flex:none;padding:var(--space-3) var(--space-4);border-top:2px solid var(--color-divider);display:flex;gap:var(--space-2)" },
-        h("button", { class: "btn btn-secondary", disabled: !rb, onClick: () => rb && openRunbookEditor(rb) }, "Edit"),
-        h("button", { class: "btn btn-ghost", disabled: !rb, style: "color:var(--color-accent)", onClick: () => rb && deleteRunbook(rb) }, "Delete"),
-        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !rb, onClick: () => rb && openRunbookRun(rb) }, "Run")));
+        h("button", { class: "btn btn-secondary", disabled: !rb, title: "Edit this runbook's YAML", onClick: () => rb && openRunbookEditor(rb) }, "Edit"),
+        h("button", { class: "btn btn-ghost", disabled: !rb, style: "color:var(--color-accent)", title: "Delete this runbook (confirms first)", onClick: () => rb && deleteRunbook(rb) }, "Delete"),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !rb, title: "Run this runbook across nodes or a group", onClick: () => rb && openRunbookRun(rb) }, "Run")));
     return h("div", { style: "flex:1;display:flex;min-height:0" }, left, right);
   }
   function openRunbookEditor(existing) {
@@ -1742,7 +1819,7 @@
     openSheet("runbook-editor", draft.id == null ? "New runbook" : "Edit runbook", body,
       [draft.id != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: () => { const r = selRunbookById(draft.id); closeSheet("runbook-editor"); if (r) deleteRunbook(r); } }, "Delete") : null,
        h("button", { class: "btn btn-secondary", onClick: () => closeSheet("runbook-editor") }, "Cancel"),
-       h("button", { class: "btn btn-primary", onClick: save }, draft.id == null ? "Create" : "Save")], 720);
+       h("button", { class: "btn btn-primary", title: "Validate the YAML and save this runbook", onClick: save }, draft.id == null ? "Create" : "Save")], 720);
   }
   const selRunbookById = (id) => state.runbooks.find((r) => r.id === id) || null;
   function deleteRunbook(rb) {
@@ -1783,7 +1860,7 @@
       h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:6px" }, "stagger", stagger, "ms between nodes"));
     openSheet("runbook-run", "Run runbook — " + rb.name, body,
       [h("button", { class: "btn btn-secondary", onClick: () => closeSheet("runbook-run") }, "Cancel"),
-       h("button", { class: "btn btn-primary", onClick: run }, "Run")], 620);
+       h("button", { class: "btn btn-primary", title: "Start this runbook on the selected targets (up to 128 nodes)", onClick: run }, "Run")], 620);
     renderTargets();
   }
   function runRunbookDemo(rb, body) {
@@ -1832,7 +1909,7 @@
       }
       case "node_down": { const n = findNode(ev.id); if (n) n.status = "offline"; if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) { renderHeaderInto(ui.header); rebuildComposerState(); } } recomputeFleet(); break; }
       case "node_updated": { const n = findNode(ev.id); if (n) { if (ev.label != null) n.label = ev.label; if (ev.group != null) n.group = ev.group; if (ev.status) n.status = ev.status; } if (state.view === "nodes") renderNodeList(); break; }
-      case "heartbeat": { const n = findNode(ev.id); if (n) { n.lastSeen = ev.ts || now(); if (ev.rtt_ms != null) n.rttMs = ev.rtt_ms; } if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) renderHeaderInto(ui.header); } break; }
+      case "heartbeat": { const n = findNode(ev.id); if (n) { n.lastSeen = ev.ts || now(); if (ev.rtt_ms != null) n.rttMs = ev.rtt_ms; if (ev.target != null) n.target = ev.target; } if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) renderHeaderInto(ui.header); } break; }
       case "command_issued": { const n = findNode(ev.id); if (n) n.inflight = (n.inflight || 0) + 1; if (state.view === "nodes") renderNodeList(); break; }
       case "result": {
         const n = findNode(ev.id); if (n) n.inflight = Math.max(0, (n.inflight || 0) - 1);
@@ -1889,6 +1966,7 @@
     rec.caps = (meta.capabilities || []).join(",") || rec.caps || "";
     rec.layout = meta.layout || rec.layout || "us";
     rec.promptState = meta.prompt_state != null ? meta.prompt_state : rec.promptState;
+    rec.target = meta.target != null ? meta.target : (rec.target || "unknown");
     rec.lastSeen = meta.last_seen || now();
     rec.inflight = meta.inflight || 0;
     return rec;
@@ -1903,7 +1981,7 @@
   function apiNodeToRec(n) {
     return { id: n.id, label: n.label || "", group: n.group || "", ip: n.ip || "", fw: n.fw_version || "",
       status: n.status, rttMs: n.rtt_ms, caps: (n.capabilities || []).join(","), lastSeen: n.last_seen || now(), inflight: n.inflight || 0,
-      layout: n.layout || "us", promptState: n.prompt_state || null };
+      layout: n.layout || "us", promptState: n.prompt_state || null, target: n.target || "unknown" };
   }
   async function loadLive() {
     const health = await getJSON("/health");
@@ -1937,8 +2015,8 @@
     hub: { uptime_ms: 3 * 3600e3, bind: "hub.local", swarm_port: 9000, web_port: 8080, version: "demo" },
     settings: { heartbeat_interval_ms: 5000, stale_timeout_ms: 15000, output_retention_days: 30, event_retention_days: 90, require_confirm_dangerous: true },
     nodes: [
-      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.0.0", status: "online", rttMs: 3, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login" },
-      { id: "node-02", label: "example target two", group: "group-a", ip: "10.0.0.12", fw: "1.0.0", status: "online", rttMs: 5, ageMs: 4000, caps: "hid,cdc,serial_tx,ota", layout: "de", promptState: "shell" },
+      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.0.0", status: "online", rttMs: 3, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login", target: "up" },
+      { id: "node-02", label: "example target two", group: "group-a", ip: "10.0.0.12", fw: "1.0.0", status: "online", rttMs: 5, ageMs: 4000, caps: "hid,cdc,serial_tx,ota", layout: "de", promptState: "shell", target: "down" },
       { id: "node-03", label: "example target three (old fw)", group: "group-b", ip: "10.0.0.13", fw: "0.9.4", status: "offline", rttMs: null, ageMs: 8600e3, caps: "hid,cdc", layout: "us", promptState: null },
     ],
     consoles: {
@@ -1979,7 +2057,7 @@
       id: n.id, label: n.label || "", group: n.group || "", ip: n.ip || "", fw: n.fw || "",
       status: n.status || "online", rttMs: n.rttMs != null ? n.rttMs : null, caps: n.caps || "hid,cdc",
       lastSeen: now() - (n.ageMs || 0), inflight: 0,
-      layout: n.layout || "us", promptState: n.promptState != null ? n.promptState : null,
+      layout: n.layout || "us", promptState: n.promptState != null ? n.promptState : null, target: n.target || "unknown",
     }));
     state.bridge = Object.assign({ enabled: false, bind: "0.0.0.0", ports: [] }, d.bridge || {});
     state.bundles = (d.bundles || []).map((b) => ({ name: b.name, files: b.files || [], total_sha256: b.total_sha256,

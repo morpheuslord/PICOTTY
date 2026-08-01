@@ -120,3 +120,58 @@ cd hub/static/vendor && sh fetch-vendor.sh   # on a networked machine
 
 Until then the tags 404 harmlessly and the UI falls back to the existing DOM-log
 renderer and a `.cast` download link. See `vendor/README.md`.
+
+## Help system — in-app docs + tooltips + `?` deep-links
+Additive and non-breaking; DEMO mode still works. `node --check hub/static/app.js`
+passes and `help.html` is balanced HTML.
+
+Files touched: `app.js`, `index.html` (unchanged — help is reachable directly at
+`/help.html`), and a NEW self-contained `help.html`.
+
+### New page — `hub/static/help.html`
+- A single, self-contained docs page. Links `styles.css` for the shared palette
+  (CSS custom properties), then an inline `<style>` for a sticky left TOC/sidebar
+  + scrollable content column. Responsive (sidebar collapses under 820px). No CDN
+  / no external assets — everything inline or same-origin (isolated VLAN).
+- Top "← Back to dashboard" link (`/`) in the sidebar and again at the foot of the
+  Security section; a grouped table of contents jumps to every section.
+- One `<section id="…">` per feature, each with prose adapted from `docs/*.md`
+  (operations, automation, ota, firmware, considerations) plus the real REST
+  endpoint(s) from `hub/app/api/rest.py`, gotchas and safety notes. Addresses and
+  secrets are placeholders (`<hub-host>`, `<password>`, `<your-endpoint>`).
+- **Stable anchor ids:** `overview`, `nodes`, `console`, `input-modes`,
+  `control-bytes`, `keyboard-layout`, `ping-read-reboot`, `prompt-state`,
+  `macros`, `sequences`, `expect`, `offline-queue`, `runbooks`, `bulk`,
+  `session-recording`, `serial-bridge`, `ota`, `alerts`, `settings`, `events`,
+  `security` (21 sections).
+
+### `app.js` — shared helper
+- New `helpLink(anchor, label, opts)` returns a small circular muted "?" `<a>`
+  (`href="help.html#<anchor>"`, `target="_blank"`, `rel="noopener"`,
+  `var(--color-neutral-600)`, ~15px, `cursor:help`). It `stopPropagation()`s so it
+  never triggers the control it sits beside, and seeds its own hover tooltip.
+  Reused everywhere (27 call sites).
+
+### `app.js` — where the `?` links land (group- + key-button-level)
+- **Top nav:** a new **Help** entry (after Settings) opens `help.html` in a new
+  tab, with a trailing "?" glyph.
+- **Panel/section headers:** Nodes rail, Serial console toolbar, right-rail
+  history/events tabs, Macros header, Runbooks header, Events header, Settings
+  header + Safety + Alert-endpoints sub-headers, and the composer's Input row.
+- **Feature buttons in the node detail header:** Ping/Read/Reboot, Expect, Queue,
+  Replay, Bridge, and Firmware (OTA) each get an adjacent anchor-specific "?".
+- **Composer rows:** HID Keys/Chords and the Serial control-byte row link to
+  `#control-bytes`; the Macros row links to `#macros`.
+- **Modal sheets:** Expect, Queue, Bridge, OTA update + rollout bodies carry an
+  inline "?" to their section.
+
+### `app.js` — tooltips (`title=`) on every interactive control
+- ~60 controls now carry a concise `title`: nav links + rail toggles + WS pill;
+  node-list filter/status radios and each node row; console toolbar
+  (autoscroll/wrap/clear/download); all detail-header actions (with caveats, e.g.
+  "Reboot the Pico node (NOT the target machine)"); HID keys (per-key intent),
+  chords (incl. ⚠ for CTRL+ALT+DEL and ALT+SysRq+B), append-⏎ and char-delay,
+  macro chips; Serial field + each control byte (with hex); macro/runbook
+  Run/Edit/Delete/New/Save; Events Export CSV; Settings Save; and the sheet
+  primary actions (Run expect, Queue, Assign/Reassign/Unassign bridge, Update
+  firmware, Create bundle, Start rollout, Run runbook).

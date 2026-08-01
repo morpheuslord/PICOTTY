@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PICOTTY / Swarm Control — Help &amp; Docs</title>
+  <!-- Share the dashboard's design tokens (palette, spacing, fonts). No CDN,
+       no external assets — the hub lives on an isolated VLAN. -->
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* --- doc-only layout, on top of the shared palette in styles.css --------- */
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--color-bg); color: var(--color-text); }
+    .doc-shell { display: flex; min-height: 100vh; align-items: flex-start; }
+
+    /* Sidebar / table of contents */
+    .doc-nav {
+      position: sticky; top: 0; align-self: flex-start;
+      flex: none; width: 264px; height: 100vh; overflow-y: auto;
+      border-right: 2px solid var(--color-divider);
+      background: var(--color-surface);
+      padding: var(--space-4) 0 var(--space-8);
+    }
+    .doc-nav .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+      font-size: 16px; letter-spacing: 0.02em;
+      padding: 0 var(--space-4) var(--space-3);
+    }
+    .doc-nav .brand .dot { width: 12px; height: 12px; background: var(--color-accent); display: block; flex: none; }
+    .doc-nav a.back {
+      display: block; margin: 0 var(--space-4) var(--space-3);
+      font-size: 13px; color: var(--color-accent); text-decoration: none;
+      border: 1px solid var(--color-divider); padding: 6px 10px; text-align: center;
+    }
+    .doc-nav a.back:hover { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+    .toc-group {
+      font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--color-neutral-600); padding: var(--space-3) var(--space-4) 4px;
+    }
+    .doc-nav a.toc {
+      display: block; font-size: 13px; text-decoration: none; color: var(--color-neutral-800);
+      padding: 5px var(--space-4); border-left: 3px solid transparent;
+    }
+    .doc-nav a.toc:hover { color: var(--color-accent); background: color-mix(in srgb, var(--color-text) 5%, transparent); }
+    .doc-nav a.toc:target, .doc-nav a.toc.active { border-left-color: var(--color-accent); color: var(--color-accent); }
+
+    /* Content column */
+    .doc-main { flex: 1 1 auto; min-width: 0; }
+    .doc-content { max-width: 860px; margin: 0 auto; padding: var(--space-6) var(--space-6) 20vh; }
+    .doc-hero { border-bottom: 2px solid var(--color-divider); padding-bottom: var(--space-4); margin-bottom: var(--space-6); }
+    .doc-hero h1 { font-size: 34px; margin: 0 0 var(--space-2); }
+    .doc-hero p { font-size: 15px; color: var(--color-neutral-700); margin: 0; }
+
+    section { padding-top: var(--space-6); margin-top: var(--space-4); border-top: 1px solid var(--color-divider); }
+    section:first-of-type { border-top: 0; }
+    section > h2 {
+      font-size: 24px; margin: 0 0 var(--space-3); scroll-margin-top: var(--space-4);
+      display: flex; align-items: baseline; gap: 10px;
+    }
+    section > h2 .permalink { font-size: 14px; color: var(--color-neutral-500); text-decoration: none; opacity: 0; }
+    section > h2:hover .permalink { opacity: 1; }
+    section h3 { font-size: 16px; margin: var(--space-4) 0 var(--space-2); color: var(--color-neutral-900); }
+    section p, section li { font-size: 14px; line-height: 1.6; color: var(--color-neutral-800); }
+    section ul, section ol { margin: 0 0 var(--space-3); padding-left: var(--space-4); }
+    section li { margin-bottom: 4px; }
+    section a { color: var(--color-accent); }
+
+    code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    p code, li code, td code {
+      font-size: 12.5px; background: color-mix(in srgb, var(--color-text) 8%, transparent);
+      padding: 1px 5px; border-radius: 3px;
+    }
+    pre {
+      background: #1b1918; color: #c9c4c0; padding: var(--space-3) var(--space-4);
+      overflow-x: auto; font-size: 12.5px; line-height: 1.55; margin: 0 0 var(--space-3);
+      border-left: 3px solid var(--color-accent);
+    }
+    pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+
+    .lede { font-size: 15px; color: var(--color-neutral-700); }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 var(--space-3); }
+    .endpoint {
+      display: inline-block; font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+      background: var(--color-surface); border: 1px solid var(--color-divider);
+      padding: 2px 8px; margin: 2px 4px 2px 0;
+    }
+    .endpoint b { color: var(--color-accent-700); }
+
+    .table-wrap { overflow-x: auto; margin: 0 0 var(--space-3); }
+    table.doc { border-collapse: collapse; width: 100%; font-size: 13px; }
+    table.doc th, table.doc td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--color-divider); vertical-align: top; }
+    table.doc th { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-neutral-600); border-bottom: 2px solid var(--color-divider); }
+    table.doc td.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+
+    .callout {
+      border-left: 3px solid var(--color-accent); background: var(--color-accent-100);
+      color: var(--color-accent-900); padding: var(--space-3) var(--space-4); margin: 0 0 var(--space-3);
+      font-size: 13.5px;
+    }
+    .callout.info { border-left-color: #3a6ea5; background: color-mix(in srgb, #3a6ea5 12%, transparent); color: var(--color-text); }
+    .callout.warn { border-left-color: #c98a00; background: color-mix(in srgb, #c98a00 14%, transparent); color: var(--color-text); }
+    .callout strong { font-weight: 700; }
+    .kbd {
+      display: inline-block; font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+      border: 1px solid var(--color-divider); border-bottom-width: 2px; padding: 1px 6px; background: var(--color-surface);
+    }
+    .where { font-size: 12.5px; color: var(--color-neutral-700); margin: 0 0 var(--space-3); }
+    .where b { color: var(--color-neutral-900); }
+
+    @media (max-width: 820px) {
+      .doc-nav { position: static; width: 100%; height: auto; border-right: 0; border-bottom: 2px solid var(--color-divider); }
+      .doc-shell { flex-direction: column; }
+      .doc-content { padding: var(--space-4); }
+    }
+  </style>
+</head>
+<body>
+  <div class="doc-shell">
+    <nav class="doc-nav" aria-label="Table of contents">
+      <div class="brand"><span class="dot"></span> SWARM CONTROL · HELP</div>
+      <a class="back" href="/">← Back to dashboard</a>
+      <div class="toc-group">Getting oriented</div>
+      <a class="toc" href="#overview">Overview</a>
+      <a class="toc" href="#nodes">Nodes &amp; the node list</a>
+      <a class="toc" href="#console">The serial console</a>
+      <div class="toc-group">Driving a target</div>
+      <a class="toc" href="#input-modes">Input modes: HID vs Serial</a>
+      <a class="toc" href="#control-bytes">Control bytes &amp; keys</a>
+      <a class="toc" href="#keyboard-layout">Keyboard layout</a>
+      <a class="toc" href="#ping-read-reboot">Ping · Read · Reboot</a>
+      <a class="toc" href="#prompt-state">Prompt-state badges</a>
+      <div class="toc-group">Automation</div>
+      <a class="toc" href="#macros">Macros</a>
+      <a class="toc" href="#sequences">Sequences &amp; steps</a>
+      <a class="toc" href="#expect">Expect engine</a>
+      <a class="toc" href="#offline-queue">Offline command queue</a>
+      <a class="toc" href="#runbooks">Runbooks</a>
+      <a class="toc" href="#bulk">Bulk / fleet actions</a>
+      <div class="toc-group">Advanced &amp; ops</div>
+      <a class="toc" href="#session-recording">Session recording &amp; replay</a>
+      <a class="toc" href="#serial-bridge">Raw serial bridge</a>
+      <a class="toc" href="#ota">OTA firmware updates</a>
+      <a class="toc" href="#alerts">Alerts</a>
+      <a class="toc" href="#settings">Settings</a>
+      <a class="toc" href="#events">Events &amp; audit</a>
+      <a class="toc" href="#security">Security model</a>
+    </nav>
+
+    <main class="doc-main">
+      <div class="doc-content">
+        <div class="doc-hero">
+          <h1>PICOTTY — Help &amp; Operator Docs</h1>
+          <p>Every control in the dashboard, what it does, the REST endpoint behind it, and the gotchas worth knowing. Each <span class="mono">?</span> icon in the UI deep-links to the matching section here.</p>
+        </div>
+
+        <!-- ================= OVERVIEW ================= -->
+        <section id="overview">
+          <h2>Overview <a class="permalink" href="#overview">#</a></h2>
+          <p class="lede">PICOTTY (branded <strong>Swarm Control</strong> in the UI) is a fleet console for headless machines. Each target has a Raspberry Pi Pico wired to it as a USB HID keyboard and a serial line; the Picos ("nodes") dial home to a <strong>hub</strong> (a FastAPI service) over TCP, and this dashboard is the hub's browser front-end.</p>
+          <p>The browser holds <strong>no authoritative state</strong>. On load it pulls the registry and recent history over REST, then a WebSocket keeps everything live: node up/down, heartbeats, command results, streamed serial output, prompt-state changes, and progress for expect / OTA / runbook jobs.</p>
+          <h3>DEMO mode</h3>
+          <p>If the hub API is unreachable (for example you opened the file directly), the UI drops into <strong>DEMO mode</strong> with a small placeholder fleet so every screen still renders and every affordance is clickable. Demo carries no real addresses or credentials; actions are simulated locally and nothing is persisted.</p>
+          <h3>Layout of the Nodes view</h3>
+          <ul>
+            <li><strong>Left rail</strong> — the searchable, filterable node list. See <a href="#nodes">Nodes</a>.</li>
+            <li><strong>Center</strong> — the selected node's detail header, the <a href="#console">serial console</a>, live job bars, and the input <a href="#input-modes">composer</a>.</li>
+            <li><strong>Right rail</strong> — command history and the live event feed.</li>
+          </ul>
+          <p>The top nav switches between <strong>Nodes</strong>, <a href="#macros">Macros</a>, <a href="#runbooks">Runbooks</a>, <a href="#events">Events</a>, and <a href="#settings">Settings</a>, and carries a live fleet count, hub uptime, and the WebSocket status pill (green = live, amber = connecting, red = offline).</p>
+        </section>
+
+        <!-- ================= NODES ================= -->
+        <section id="nodes">
+          <h2>Nodes &amp; the node list <a class="permalink" href="#nodes">#</a></h2>
+          <p class="where">Where: <b>Nodes view → left rail.</b></p>
+          <p>Each row is one node. The colored dot is online (green) / offline (hollow); a pulsing ring means commands are in flight. The row shows the node id, its label, a <a href="#prompt-state">prompt-state badge</a> when online, the group tag, IP, and how long ago it was last seen. Click a row to select it and load its console.</p>
+          <ul>
+            <li><strong>Filter box</strong> — type to match on id, label, group, or IP. Purely client-side.</li>
+            <li><strong>All / Online / Offline</strong> — segmented status filter.</li>
+          </ul>
+          <p>The detail header (top of center pane) shows the resolved facts the node reported in its <code>hello</code>: IP, firmware version, round-trip time, <code>caps</code> (capabilities such as <code>hid</code>, <code>cdc</code>, <code>serial_tx</code>, <code>ota</code>), group, keyboard <code>layout</code>, and — if assigned — the <a href="#serial-bridge">serial bridge</a> endpoint.</p>
+          <div class="tags">
+            <span class="endpoint"><b>GET</b> /api/nodes</span>
+            <span class="endpoint"><b>GET</b> /api/nodes/{id}</span>
+            <span class="endpoint"><b>PATCH</b> /api/nodes/{id}</span>
+          </div>
+          <p class="callout info">A node is powered by its target's USB. When the target is off, the node is off — that is normal, not a fault.</p>
+        </section>
+
+        <!-- ================= CONSOLE ================= -->
+        <section id="console">
+          <h2>The serial console <a class="permalink" href="#console">#</a></h2>
+          <p class="where">Where: <b>Nodes view → center pane.</b></p>
+          <p>The dark pane streams the selected node's serial output live over the WebSocket. Every byte the target emits is stored verbatim on the hub; this pane only affects the <em>display</em>.</p>
+          <h3>Two renderers</h3>
+          <p>If the operator has vendored <strong>xterm.js</strong> into <code>hub/static/vendor/</code>, the console is a real terminal emulator — ANSI colors, cursor moves and full-screen TUIs (installers, <code>htop</code>, <code>nano</code>) render correctly. Without it, the console falls back to an <strong>append-only log</strong>: terminal control sequences are stripped and full-screen apps scroll as plain text rather than repainting. Either way the raw bytes are kept, so a <a href="#session-recording">recording</a> or a downloaded log is complete.</p>
+          <h3>Console toolbar</h3>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Control</th><th>What it does</th></tr>
+            <tr><td><strong>Autoscroll on/off</strong></td><td>Follow the tail. Toggles off automatically if you scroll up to read back; scroll to the bottom to re-arm.</td></tr>
+            <tr><td><strong>Wrap on/off</strong></td><td>Soft-wrap long lines vs. horizontal scroll (log renderer).</td></tr>
+            <tr><td><strong>Clear</strong></td><td>Clears the on-screen buffer for this node only. Does not touch the hub's stored output.</td></tr>
+            <tr><td><strong>Download log</strong></td><td>Downloads the node's full stored output as a text file (<span class="mono">/api/nodes/{id}/output/download</span>).</td></tr>
+          </table></div>
+          <p class="callout info">The console is a log view for shell interaction, not a curses terminal — unless xterm.js is vendored, full-screen TUIs won't repaint in place.</p>
+        </section>
+
+        <!-- ================= INPUT MODES ================= -->
+        <section id="input-modes">
+          <h2>Input modes: HID vs Serial <a class="permalink" href="#input-modes">#</a></h2>
+          <p class="where">Where: <b>Console composer → the HID / Serial toggle.</b></p>
+          <p>The composer has two per-node input modes. They are <strong>distinct sessions</strong> and line up only at BIOS/GRUB.</p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Mode</th><th>Writes to</th><th>Use it for</th></tr>
+            <tr><td><strong>HID</strong></td><td>USB keystrokes into the target's keyboard console (<code>tty1</code>, BIOS, GRUB)</td><td>Firmware setup, bootloaders, and any target with no serial getty. Works everywhere a keyboard does.</td></tr>
+            <tr><td><strong>Serial</strong></td><td>Raw bytes into the target's serial getty (the <code>send</code> command)</td><td>A real interactive Linux serial login. The getty echoes your keystrokes back through the console — passwords mask, no local echo.</td></tr>
+          </table></div>
+          <p><strong>How Serial mode behaves in the composer:</strong> the input field is a capture surface — keystrokes are intercepted and streamed to the getty; the field itself stays empty (the target's echo is what you see in the console). Fast typing is debounced into a few frames per second; Enter/Backspace/Tab/Esc/Ctrl-C/D/Z flush immediately.</p>
+          <p class="callout warn"><strong>The common surprise:</strong> while watching the Serial console, HID keystrokes appear to do nothing — they are landing on <code>tty1</code>, not the serial getty you're viewing. Pick the mode that matches what you're looking at.</p>
+          <p>Serial mode is offered only for nodes whose firmware advertises the <code>serial_tx</code> capability; on older firmware the toggle is greyed and the composer stays HID-only. A node that reconnects on older firmware while set to Serial falls back to HID automatically.</p>
+          <div class="tags"><span class="endpoint"><b>POST</b> /api/nodes/{id}/cmd</span> <span class="mono" style="font-size:12px">(type <code>send</code> for serial, <code>type</code>/<code>keys</code> for HID)</span></div>
+        </section>
+
+        <!-- ================= CONTROL BYTES ================= -->
+        <section id="control-bytes">
+          <h2>Control bytes &amp; keys <a class="permalink" href="#control-bytes">#</a></h2>
+          <p class="where">Where: <b>Console composer → Keys / Chords (HID) and Serial rows.</b></p>
+          <h3>HID keys &amp; chords</h3>
+          <p>In HID mode the composer offers single keys (<span class="kbd">Enter</span> <span class="kbd">Tab</span> <span class="kbd">ESC</span> <span class="kbd">↑</span> <span class="kbd">↓</span> <span class="kbd">DEL</span> <span class="kbd">F2</span> <span class="kbd">F12</span>) and chords. Two toggles tune typing:</p>
+          <ul>
+            <li><strong>append ⏎</strong> — append a newline after typed text (usually on, to "press enter").</li>
+            <li><strong>char delay (ms)</strong> — per-character delay; raise it for a target that drops fast keystrokes.</li>
+          </ul>
+          <p class="callout warn"><strong>Dangerous chords.</strong> <span class="kbd">CTRL+ALT+DEL</span> and <span class="kbd">ALT+SysRq+B</span> reset the target machine. When "require confirm for destructive keys" is on (see <a href="#settings">Settings</a>), these prompt before firing.</p>
+          <h3>Serial control bytes</h3>
+          <p>Because Serial mode writes raw bytes, common control characters map straight onto the <code>send</code> command's <code>raw</code> (hex) field. The composer's Serial row exposes them as buttons:</p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Button</th><th>Hex</th><th>Meaning</th></tr>
+            <tr><td>⏎ Enter</td><td class="mono">0d</td><td>Carriage return (the getty expects CR)</td></tr>
+            <tr><td>⌫ Bksp</td><td class="mono">7f</td><td>Backspace / delete</td></tr>
+            <tr><td>⇥ Tab</td><td class="mono">09</td><td>Tab (completion)</td></tr>
+            <tr><td>Esc</td><td class="mono">1b</td><td>Escape</td></tr>
+            <tr><td>Ctrl-C</td><td class="mono">03</td><td>Interrupt the running command (the canonical case)</td></tr>
+            <tr><td>Ctrl-D</td><td class="mono">04</td><td>EOF / logout</td></tr>
+            <tr><td>Ctrl-Z</td><td class="mono">1a</td><td>Suspend to background</td></tr>
+          </table></div>
+          <p>You can also just press these keys while focused in the Serial field — they are intercepted and sent as the right bytes.</p>
+        </section>
+
+        <!-- ================= KEYBOARD LAYOUT ================= -->
+        <section id="keyboard-layout">
+          <h2>Keyboard layout <a class="permalink" href="#keyboard-layout">#</a></h2>
+          <p class="where">Where: <b>Detail header → <code>kbd: &lt;layout&gt;</code> (read-only).</b></p>
+          <p>The node types into the target as a USB HID keyboard, and the character-to-keycode mapping is <strong>layout-specific</strong> and lives on the node, not the hub. A node hardcoded to US typing into a target set to a German/UK/French layout mistypes symbols (the classic "my password has a <code>/</code> and the node typed <code>-</code>" bug).</p>
+          <ul>
+            <li>Layout is a per-node firmware setting: <code>KEYBOARD_LAYOUT</code> in the node's <code>settings.toml</code> (<code>us</code>, <code>de</code>, <code>uk</code>, <code>fr</code>, …). Default <code>us</code>.</li>
+            <li>A requested layout whose library isn't staged on the board <strong>logs a warning and falls back to US</strong> rather than failing.</li>
+            <li>The node reports its <em>active, resolved</em> layout in <code>hello</code>; the hub shows it read-only in the header so you can see at a glance what each node is set to.</li>
+          </ul>
+          <p>Only literal text (<code>type</code> / <code>send</code>-as-text) is layout-sensitive; named chords (<code>keys</code>, e.g. <code>CTRL+C</code>) map to keycodes directly and are unaffected.</p>
+        </section>
+
+        <!-- ================= PING / READ / REBOOT ================= -->
+        <section id="ping-read-reboot">
+          <h2>Ping · Read serial · Reboot node <a class="permalink" href="#ping-read-reboot">#</a></h2>
+          <p class="where">Where: <b>Detail header → action buttons.</b></p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Button</th><th>Does</th><th>Endpoint</th></tr>
+            <tr><td><strong>Ping</strong></td><td>Round-trips the node and updates the shown RTT.</td><td class="mono">POST /api/nodes/{id}/ping</td></tr>
+            <tr><td><strong>Read serial</strong></td><td>Asks the node to flush its serial receive buffer to the hub — useful to pull bytes the target emitted without a trailing newline.</td><td class="mono">POST /api/nodes/{id}/read</td></tr>
+            <tr><td><strong>Reboot node</strong></td><td>Reboots the <em>Pico</em>, not the target. The node drops its swarm socket briefly and reattaches; the attached machine is unaffected.</td><td class="mono">POST /api/nodes/{id}/reboot</td></tr>
+          </table></div>
+          <p class="callout warn"><strong>Reboot node</strong> prompts for confirmation. It reboots the node hardware (HID + serial re-enumerate on reconnect); it does <strong>not</strong> reboot or power-cycle the target machine. To reset the target, use a power chord like <a href="#control-bytes">CTRL+ALT+DEL</a> in HID mode.</p>
+        </section>
+
+        <!-- ================= PROMPT STATE ================= -->
+        <section id="prompt-state">
+          <h2>Prompt-state badges <a class="permalink" href="#prompt-state">#</a></h2>
+          <p class="where">Where: <b>Node rows &amp; detail header (colored badge, online nodes only).</b></p>
+          <p>Online/offline tells you a node is <em>reachable</em>; it doesn't tell you <em>where the target is</em>. The hub classifies each node's serial output into a coarse <strong>prompt-state</strong> so a per-node badge shows, across the whole fleet, which boxes sit at a login prompt, which are mid-boot, and which have panicked.</p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>State</th><th>Recognizes</th></tr>
+            <tr><td class="mono">panic</td><td>Kernel panic / oops / BUG / call trace</td></tr>
+            <tr><td class="mono">grub</td><td>GRUB bootloader menu</td></tr>
+            <tr><td class="mono">password</td><td>A password prompt</td></tr>
+            <tr><td class="mono">login</td><td>A login prompt</td></tr>
+            <tr><td class="mono">shell</td><td>An interactive prompt (line ending in <code>$</code>, <code>#</code>, or <code>&gt;</code>)</td></tr>
+            <tr><td class="mono">booting</td><td>Boot chatter (<code>[ OK ]</code>, <code>systemd[1]</code>, kernel timestamps)</td></tr>
+          </table></div>
+          <p>It is computed hub-side from the freshest bytes of the rolling output tail (first match wins, most-urgent first), so no firmware change is needed. It is <strong>live status, never persisted</strong>: <code>null</code> while offline, exposed read-only as <code>prompt_state</code> on <code>GET /api/nodes/{id}</code>, and broadcast as a <code>node_state</code> event to every browser so badges update without any console open. It's the same matcher the <a href="#expect">expect engine</a> waits on.</p>
+        </section>
+
+        <!-- ================= MACROS ================= -->
+        <section id="macros">
+          <h2>Macros <a class="permalink" href="#macros">#</a></h2>
+          <p class="where">Where: <b>Macros view</b>, and quick-run chips in the HID composer.</p>
+          <p>A macro is a named, reusable <a href="#sequences">HID sequence</a> stored on the hub and replayed on any node in one click. Steps run top-to-bottom as a single sequence and stop on the first error.</p>
+          <h3>Creating &amp; editing</h3>
+          <ul>
+            <li><strong>New macro</strong> / <strong>Edit</strong> opens the editor. Give it a name and optional group.</li>
+            <li>Add steps of three kinds: <strong>Type text</strong> (optionally append ⏎), <strong>Key / chord</strong> (e.g. <code>ENTER</code>, <code>CTRL+ALT+DELETE</code>), and <strong>Wait</strong> (a fixed pause in ms). Reorder with ↑ ↓, remove with ×.</li>
+            <li><strong>Dangerous</strong> checkbox — require a confirmation prompt before this macro runs (for reboots, power keys, destructive commands).</li>
+          </ul>
+          <h3>Running &amp; deleting</h3>
+          <ul>
+            <li><strong>Run</strong> (table row or detail panel) replays the macro on the selected node. The composer's macro chips run the first few macros without leaving the console.</li>
+            <li><strong>Delete</strong> removes it after a confirmation.</li>
+          </ul>
+          <div class="tags">
+            <span class="endpoint"><b>GET</b> /api/macros</span>
+            <span class="endpoint"><b>POST</b> /api/macros</span>
+            <span class="endpoint"><b>PATCH</b> /api/macros/{id}</span>
+            <span class="endpoint"><b>DELETE</b> /api/macros/{id}</span>
+            <span class="endpoint"><b>POST</b> /api/macros/{id}/run</span>
+          </div>
+        </section>
+
+        <!-- ================= SEQUENCES ================= -->
+        <section id="sequences">
+          <h2>Sequences &amp; steps <a class="permalink" href="#sequences">#</a></h2>
+          <p>A <strong>sequence</strong> is the fire-and-forget primitive underneath macros: an ordered list of discrete steps the firmware's <code>run_sequence</code> understands. It is the exact shape used by the macro editor and, extended with waits, by the <a href="#expect">expect engine</a> and <a href="#runbooks">runbooks</a>.</p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Step</th><th>Shape</th><th>Effect</th></tr>
+            <tr><td>Type</td><td class="mono">{"type":"type","text":"uptime\n"}</td><td>HID keystrokes (optional <code>char_delay_ms</code>)</td></tr>
+            <tr><td>Keys</td><td class="mono">{"type":"keys","chord":["CTRL","C"]}</td><td>An HID chord</td></tr>
+            <tr><td>Send</td><td class="mono">{"type":"send","data":"root\n"}</td><td>Raw serial bytes (text, or <code>{"raw":"03"}</code> hex)</td></tr>
+            <tr><td>Delay</td><td class="mono">{"delay_ms":500}</td><td>A fixed pause</td></tr>
+          </table></div>
+          <p>A plain sequence just runs the steps in order and stops on the first error. To make it <em>react</em> to the target — wait for a prompt before responding — add <code>wait_for</code> steps and you have an expect job.</p>
+          <div class="tags"><span class="endpoint"><b>POST</b> /api/nodes/{id}/sequence</span></div>
+        </section>
+
+        <!-- ================= EXPECT ================= -->
+        <section id="expect">
+          <h2>Expect engine <a class="permalink" href="#expect">#</a></h2>
+          <p class="where">Where: <b>Detail header → Expect button</b>; live progress bar under the console.</p>
+          <p>An <strong>expect job</strong> alternates <em>action</em> steps with <em>wait_for</em> steps that block until a regex appears in the node's serial output within a timeout. That is what turns PICOTTY from a keyboard into automation: "wait for <code>login:</code>, send the user, wait for <code>Password:</code>, send the password, wait for a shell prompt." All the waiting is hub-side; the node just keeps emitting output and running the dispatched steps.</p>
+          <h3>Building a job</h3>
+          <p>The <strong>Expect</strong> builder lets you add, reorder, and remove three step kinds:</p>
+          <ul>
+            <li><strong>Send</strong> — text into the serial line (use <code>\n</code> / <code>\t</code> escapes).</li>
+            <li><strong>Wait-for</strong> — a regex, a <code>timeout_ms</code>, and <strong>on_timeout</strong> = <code>fail</code> (stop the job) or <code>continue</code> (log it, move on — for an optional prompt).</li>
+            <li><strong>Delay</strong> — a fixed pause.</li>
+          </ul>
+          <p>A <code>wait_for</code> searches only output that arrived <em>after the preceding action</em>, so it can't match a stale prompt. <strong>Run expect</strong> starts the job; the live bar shows step/total, phase, and detail, with a <strong>Cancel</strong> button. Terminal states: <code>done</code>, <code>failed</code>, <code>timeout</code>, <code>cancelled</code>.</p>
+          <div class="callout info"><strong>One running job per node</strong> is a hard rule (starting a second returns <code>busy</code>, HTTP 409). Jobs are bounded: 64 steps, 512-char regex, 15 s default / 120 s max per wait, 600 s total wall-time.</div>
+          <p><code>send</code> needs a serial getty (the <code>serial_tx</code> capability); on a node without it, use <code>type</code>/<code>keys</code> actions to drive <code>tty1</code> instead.</p>
+          <pre><code>POST /api/nodes/{id}/expect
+{"steps": [
+  {"wait_for": {"regex": "login:\\s*$", "timeout_ms": 30000}},
+  {"type": "send", "data": "root\n"},
+  {"wait_for": {"regex": "[Pp]assword:\\s*$", "timeout_ms": 10000}},
+  {"type": "send", "data": "&lt;password&gt;\n"},
+  {"wait_for": {"regex": "[#$]\\s*$"}},
+  {"type": "send", "data": "uptime\n"}
+]}</code></pre>
+          <div class="tags">
+            <span class="endpoint"><b>POST</b> /api/nodes/{id}/expect</span>
+            <span class="endpoint"><b>GET</b> /api/nodes/{id}/expect/{job}</span>
+            <span class="endpoint"><b>POST</b> /api/nodes/{id}/expect/{job}/cancel</span>
+          </div>
+        </section>
+
+        <!-- ================= OFFLINE QUEUE ================= -->
+        <section id="offline-queue">
+          <h2>Offline command queue <a class="permalink" href="#offline-queue">#</a></h2>
+          <p class="where">Where: <b>Detail header → Queue button.</b></p>
+          <p>Dispatching to an offline node normally fails. But a node is powered by its target, so it is off exactly when you often most want to act — "press ENTER at GRUB" is something you want staged <em>before</em> you power the box on, delivered the instant it dials in.</p>
+          <ul>
+            <li>Add a command to type, with an optional <strong>TTL</strong> (minutes; default 1 hour, 0/blank = no expiry). It is validated at enqueue time.</li>
+            <li>The <strong>Pending</strong> list shows queued commands with their remaining TTL; <strong>Cancel</strong> removes one.</li>
+            <li>On the node's next <code>hello</code>, the hub drains the queue in issue order — <em>after</em> announcing the node online. Expired rows are dropped. If the node is already online, it drains immediately.</li>
+          </ul>
+          <p>The queue is an explicit opt-in — the default dispatch path never buffers silently. Queued commands live in a durable table, so a hub restart doesn't lose them.</p>
+          <div class="tags">
+            <span class="endpoint"><b>POST</b> /api/nodes/{id}/queue</span>
+            <span class="endpoint"><b>GET</b> /api/nodes/{id}/queue</span>
+            <span class="endpoint"><b>DELETE</b> /api/nodes/{id}/queue/{qid}</span>
+          </div>
+        </section>
+
+        <!-- ================= RUNBOOKS ================= -->
+        <section id="runbooks">
+          <h2>Runbooks <a class="permalink" href="#runbooks">#</a></h2>
+          <p class="where">Where: <b>Runbooks view.</b></p>
+          <p>A macro is a single sequence on one node. A <strong>runbook</strong> is the fleet-scale version: a named, durable YAML <a href="#expect">expect</a> flow run across a whole node group, with per-node staggering and a live progress view. Each target node gets its own expect job driven by the runbook's steps.</p>
+          <h3>Authoring</h3>
+          <p><strong>New runbook</strong> / <strong>Edit</strong> opens a YAML editor. A runbook is a mapping with a <code>name</code> and a non-empty <code>steps</code> list; each step is one of <code>wait_for</code> (with optional <code>timeout_ms</code> / <code>on_timeout</code>), <code>send</code>, <code>type</code>, <code>keys</code>, or <code>delay_ms</code>. The hub validates the YAML on save (<code>bad_runbook</code> on failure).</p>
+          <pre><code>name: log-in-and-check
+steps:
+  - wait_for: "login:"
+    timeout_ms: 30000
+  - send: "root\n"
+  - wait_for: "[Pp]assword:"
+  - send: "&lt;password&gt;\n"
+  - wait_for: "[#$] $"
+  - type: "uptime\n"</code></pre>
+          <h3>Running</h3>
+          <p><strong>Run</strong> targets an explicit set of nodes or a whole <strong>group</strong>, with a <strong>stagger</strong> (ms between nodes). Up to 128 nodes per run. Per target: offline → <code>skipped</code>; already running an expect job → <code>rejected</code> (busy); otherwise it goes <code>running</code>. One node failing does <strong>not</strong> abort the fleet. The <strong>Runs</strong> pane streams a per-node status summary live.</p>
+          <div class="tags">
+            <span class="endpoint"><b>GET/POST</b> /api/runbooks</span>
+            <span class="endpoint"><b>PATCH/DELETE</b> /api/runbooks/{id}</span>
+            <span class="endpoint"><b>POST</b> /api/runbooks/{id}/run</span>
+            <span class="endpoint"><b>GET</b> /api/runbooks/{id}/runs/{run_id}</span>
+          </div>
+        </section>
+
+        <!-- ================= BULK ================= -->
+        <section id="bulk">
+          <h2>Bulk / fleet actions <a class="permalink" href="#bulk">#</a></h2>
+          <p>Fleet-scale operations fan a single action out across many nodes with an optional stagger, so one slow node never blocks the rest:</p>
+          <ul>
+            <li><strong>Runbook run across a group</strong> — the primary fleet-automation path (see <a href="#runbooks">Runbooks</a>).</li>
+            <li><strong>Canary OTA rollout</strong> — update one node, wait for it to come back healthy, then stagger the rest (see <a href="#ota">OTA</a>).</li>
+            <li><strong>Bulk command</strong> — dispatch one command to a list of nodes, with <code>skip_offline</code> and <code>stagger_ms</code>.</li>
+          </ul>
+          <div class="tags">
+            <span class="endpoint"><b>POST</b> /api/bulk/cmd</span>
+            <span class="endpoint"><b>POST</b> /api/bulk/ota</span>
+          </div>
+          <p class="callout warn">Fleet actions touch many machines at once. Prefer a staggered rollout and a small canary batch over "all at once," especially for anything destructive or for firmware.</p>
+        </section>
+
+        <!-- ================= SESSION RECORDING ================= -->
+        <section id="session-recording">
+          <h2>Session recording &amp; replay <a class="permalink" href="#session-recording">#</a></h2>
+          <p class="where">Where: <b>Detail header → Replay button.</b></p>
+          <p>The hub stores every output chunk with a hub-stamped timestamp, so a past session — an install, a crash, a boot — can be replayed exactly as it happened, with no separate capture path. The hub exports it as an <strong>asciicast v2</strong> recording.</p>
+          <ul>
+            <li><strong>Replay</strong> plays the recording inline when the asciinema player is vendored; otherwise it offers a <code>.cast</code> download you can play with <code>asciinema play &lt;id&gt;.cast</code>.</li>
+            <li>The window is bounded by <code>since</code>/<code>before</code> (ms on the hub's clock). Node timestamps are deliberately ignored — the Picos have no RTC.</li>
+          </ul>
+          <div class="tags"><span class="endpoint"><b>GET</b> /api/nodes/{id}/session.cast</span></div>
+          <p>It is read-only over existing data: no schema, firmware, or protocol change.</p>
+        </section>
+
+        <!-- ================= SERIAL BRIDGE ================= -->
+        <section id="serial-bridge">
+          <h2>Raw serial bridge <a class="permalink" href="#serial-bridge">#</a></h2>
+          <p class="where">Where: <b>Detail header → Bridge button</b>; enabled hub-wide in <a href="#settings">Settings</a>.</p>
+          <p>The bridge exposes an assigned node's serial line as a plain <strong>TCP socket</strong>, so any tool that speaks raw serial — <code>minicom</code>, PuTTY, <code>conserver</code>, <code>esptool</code> — attaches to a node unchanged:</p>
+          <pre><code>minicom -D tcp:&lt;hub-host&gt;:&lt;port&gt;      # interactive serial to that node</code></pre>
+          <p>It is <strong>off by default and opt-in per node</strong>:</p>
+          <ul>
+            <li>Enable the subsystem with the <code>serial_bridge_enabled</code> setting (Settings). Toggling binds/unbinds listeners immediately.</li>
+            <li><strong>Assign</strong> a node a TCP port (1024–65535, not a hub face port, not already taken). <strong>Reassign</strong> changes it; <strong>Unassign</strong> removes it. The map is durable — one port per node.</li>
+            <li>The hub pipes socket bytes → the node's serial line and the node's output → the socket. A node with no <code>serial_tx</code> gets a <strong>read-only</strong> bridge (writes dropped).</li>
+          </ul>
+          <div class="tags">
+            <span class="endpoint"><b>GET</b> /api/bridge</span>
+            <span class="endpoint"><b>POST</b> /api/nodes/{id}/bridge?port=N</span>
+            <span class="endpoint"><b>DELETE</b> /api/nodes/{id}/bridge</span>
+          </div>
+          <p class="callout warn"><strong>Security boundary.</strong> The bridge is raw and <strong>unauthenticated</strong> — anything that can reach the port gets an interactive serial session to that node. Bind it on the management interface only and never expose a bridge port outside the isolated segment. See <a href="#security">Security</a>.</p>
+        </section>
+
+        <!-- ================= OTA ================= -->
+        <section id="ota">
+          <h2>OTA firmware updates <a class="permalink" href="#ota">#</a></h2>
+          <p class="where">Where: <b>Detail header → Firmware button</b> (ota-capable nodes only); bundles + rollout via "Manage bundles…".</p>
+          <p>OTA is a hub-driven, chunked, checksummed firmware push with a known-good fallback so a bad update self-reverts. It is the highest-risk feature — a bad push deploys to hardware you may not be able to reach — so the safety rails matter.</p>
+          <h3>Using it in the dashboard</h3>
+          <ul>
+            <li><strong>Firmware</strong> opens the per-node update sheet: pick a bundle, <strong>Update firmware</strong>, watch the live byte-progress bar. The Pico flashes, reboots, and must report <strong>healthy</strong> to confirm.</li>
+            <li><strong>Manage bundles…</strong> creates a bundle from a name + files (read in the browser, base64'd into the manifest) and lists existing bundles with their short SHA.</li>
+            <li><strong>Canary rollout</strong> updates one node, waits for it to come back <strong>healthy</strong>, then staggers the rest across picked nodes or a group.</li>
+          </ul>
+          <h3>The safety model (four rails)</h3>
+          <ol>
+            <li><strong>Writable filesystem only</strong> — a node that can't write never advertises <code>ota</code>, so the hub never pushes to it.</li>
+            <li><strong>Integrity verified before swap</strong> — every staged file's size + SHA-256 must match before a live file is touched; a corrupt bundle is discarded and firmware is left untouched.</li>
+            <li><strong>Swap keeps the old files</strong> — replaced files become <code>.bak</code> and a pending marker is written, then the node reloads.</li>
+            <li><strong>Crash-loop auto-revert</strong> — if the new firmware hangs and the watchdog resets the node, boot recovery restores the <code>.bak</code> set automatically; the node returns on the old, known-good firmware with no hands-on. Once the new firmware boots, connects, and runs, it finalizes (deletes <code>.bak</code> + marker) so a later unrelated reset can't revert it.</li>
+          </ol>
+          <div class="callout warn"><strong>Never flash the whole fleet in one shot.</strong> Use the canary rollout so a bad bundle costs one node's auto-revert cycle, not a dark rack. Verify the revert path on a bench node before trusting it in production.</div>
+          <h3>When OTA fails: wipe &amp; reflash by hand</h3>
+          <p>Some failures need hands-on recovery. An OTA node's <code>CIRCUITPY</code> drive is read-only over USB, so use <code>firmware/scripts/wipe-pico.sh</code> — it reaches the node over the CircuitPython REPL on the console serial port, disables the watchdog, and reformats the filesystem back to an empty, host-writable drive; then redeploy the firmware. If the REPL can't be reached, fall back to holding <strong>BOOTSEL</strong> while plugging in and dropping a fresh CircuitPython <code>.uf2</code> (or <code>flash_nuke.uf2</code>) onto <code>RPI-RP2</code>.</p>
+          <div class="tags">
+            <span class="endpoint"><b>GET/POST</b> /api/ota/bundles</span>
+            <span class="endpoint"><b>POST</b> /api/nodes/{id}/ota</span>
+            <span class="endpoint"><b>GET</b> /api/nodes/{id}/ota/{job}</span>
+            <span class="endpoint"><b>POST</b> /api/bulk/ota</span>
+          </div>
+        </section>
+
+        <!-- ================= ALERTS ================= -->
+        <section id="alerts">
+          <h2>Alerts <a class="permalink" href="#alerts">#</a></h2>
+          <p class="where">Where: <b>Settings → Alerts toggle + endpoint fields.</b></p>
+          <p>For a fleet you stop watching the dashboard, so the hub tells you when something matters. Every notable event already passes through the audit path, so outbound notifications hang off it — no polling.</p>
+          <ul>
+            <li><strong>Off by default.</strong> Enable <code>alerts_enabled</code> and set a <strong>webhook URL</strong> (receives JSON) and/or an <strong>ntfy topic URL</strong> (receives a plain-text body) in Settings.</li>
+            <li><strong>Which events fire:</strong> a node going <code>node_down</code>, a watchdog-recovery <code>error</code> event, and a command <code>result</code> whose status is <code>failed</code>.</li>
+            <li><strong>Dedup:</strong> the same (kind, node) alert is suppressed for 60 s, so a flapping node sends one alert, not a storm.</li>
+            <li><strong>Never blocks the loop:</strong> each notification is its own task with a 5 s timeout and a single retry; a dead endpoint can't stall the hub.</li>
+          </ul>
+          <p>Keep the alert endpoints reachable from the isolated segment, or route them through the same tunnel you use for the dashboard. Use a placeholder like <code>https://&lt;your-endpoint&gt;</code> in these fields — never paste a secret you don't want stored in hub settings.</p>
+        </section>
+
+        <!-- ================= SETTINGS ================= -->
+        <section id="settings">
+          <h2>Settings <a class="permalink" href="#settings">#</a></h2>
+          <p class="where">Where: <b>Settings view.</b></p>
+          <p>Hub configuration. Live values apply immediately; port changes need a restart. <strong>Save config</strong> writes the changes (<code>PATCH /api/settings</code>).</p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Field</th><th>Meaning</th></tr>
+            <tr><td>Hub name / Bind address</td><td>Identity and the interface the hub binds.</td></tr>
+            <tr><td>Swarm TCP port / Web UI port</td><td>The node-facing and browser-facing ports (restart to change).</td></tr>
+            <tr><td>Heartbeat interval (s)</td><td>How often a node reports in.</td></tr>
+            <tr><td>Mark offline after (s)</td><td>Stale timeout before a silent node is swept offline.</td></tr>
+            <tr><td>Output / Event retention (days)</td><td>How long stored serial output and events are kept.</td></tr>
+          </table></div>
+          <h3>Safety toggles</h3>
+          <ul>
+            <li><strong>Require confirm for destructive keys</strong> — prompt before <code>CTRL+ALT+DEL</code>, SysRq, and reboot.</li>
+            <li><strong>Serial bridge listeners</strong> — master switch for the <a href="#serial-bridge">serial bridge</a>.</li>
+            <li><strong>Alerts</strong> — enable outbound <a href="#alerts">notifications</a>.</li>
+          </ul>
+          <div class="tags"><span class="endpoint"><b>GET</b> /api/settings</span> <span class="endpoint"><b>PATCH</b> /api/settings</span></div>
+          <div class="callout info">In DEMO mode, saved settings are not persisted — they only affect the current page.</div>
+        </section>
+
+        <!-- ================= EVENTS ================= -->
+        <section id="events">
+          <h2>Events &amp; audit <a class="permalink" href="#events">#</a></h2>
+          <p class="where">Where: <b>Events view</b>, and the right-rail Events / Command history tabs in the Nodes view.</p>
+          <p>The hub journal: registrations, heartbeats, stale sweeps, errors, and failures, plus a <strong>Command audit</strong> of every command sent, its target, and its outcome. Failures and node-down events are tagged in accent for quick scanning.</p>
+          <ul>
+            <li><strong>Export CSV</strong> downloads the event log (<code>/api/events/export</code>).</li>
+            <li>The right rail's <strong>Command history</strong> tab lets you <strong>Re-run</strong> a past command on its node.</li>
+          </ul>
+          <div class="tags"><span class="endpoint"><b>GET</b> /api/events</span> <span class="endpoint"><b>GET</b> /api/events/export</span></div>
+        </section>
+
+        <!-- ================= SECURITY ================= -->
+        <section id="security">
+          <h2>Security model <a class="permalink" href="#security">#</a></h2>
+          <p><strong>Network isolation is the real security boundary.</strong> Both hub and nodes belong on an isolated management VLAN.</p>
+          <ul>
+            <li>Reach the dashboard through a tunnel — <strong>never</strong> by exposing the web port. The node-facing swarm port must never be reachable from outside the segment.</li>
+            <li>The <code>hello</code> token is a second line of defense, not a substitute for isolation.</li>
+            <li>The <a href="#serial-bridge">raw serial bridge</a> widens the boundary: each assigned port is an unauthenticated interactive serial session. Keep bridge ports inside the segment; bind on the management interface only.</li>
+            <li><strong>Auth</strong> is scaffolded but off by default (network-gated). Enable it only if you ever place the hub outside an isolated segment.</li>
+            <li>PICOTTY types real credentials into targets — treat the whole segment, the hub host, and its stored settings as sensitive. This help page uses placeholders like <code>&lt;hub-host&gt;</code> and <code>&lt;password&gt;</code>; never hardcode a real address or secret into a shared config.</li>
+          </ul>
+          <p><a href="/">← Back to the dashboard</a></p>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
