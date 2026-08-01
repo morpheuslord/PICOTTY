@@ -19,7 +19,6 @@
       if (v == null || v === false) continue;
       if (k === "style") e.setAttribute("style", v);
       else if (k === "class") e.className = v;
-      else if (k === "html") e.innerHTML = v;
       else if (k.slice(0, 2) === "on" && typeof v === "function") e.addEventListener(k.slice(2).toLowerCase(), v);
       else if (k === "value") e.value = v;
       else if (k === "checked") e.checked = !!v;
@@ -28,7 +27,10 @@
     }
     for (const kid of kids.flat()) {
       if (kid == null || kid === false) continue;
-      e.appendChild(typeof kid === "object" ? kid : document.createTextNode(String(kid)));
+      // Append real DOM nodes as-is; everything else becomes an escaped text
+      // node. A string is NEVER parsed as HTML, so a value reaching here cannot
+      // inject markup (no innerHTML sink anywhere in this helper) — XSS-safe.
+      e.appendChild(kid instanceof Node ? kid : document.createTextNode(String(kid)));
     }
     return e;
   }

@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .. import __version__, config
 from ..core import Hub
 from ..protocol import validate_send
-from ..utils import gen_token, hash_token, now_ms
+from ..utils import gen_token, hash_token, now_ms, verify_password
 from .models import (
     BulkCmd, CmdBody, ExpectBody, KeysBody, LoginBody, MacroCreate, MacroPatch,
     MacroRun, NodePatch, OTABundleCreate, OTAPush, OTARollout, QueueBody,
@@ -632,7 +632,9 @@ async def login(request: Request, body: LoginBody):
     if not hub.settings.get("auth_enabled"):
         return {"ok": True, "detail": "auth disabled; access gated at the network layer"}
     stored = await hub.db.get_setting_raw("auth_password_hash")
-    if stored and hash_token(body.password) == stored:
+    # A human password: verify with the memory-hard KDF + constant-time compare,
+    # never the fast token hash. (auth_password_hash is written by hash_password.)
+    if verify_password(body.password, stored):
         return {"ok": True}
     return err("unauthorized", "bad password")
 
