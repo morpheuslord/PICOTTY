@@ -80,6 +80,11 @@ class NodeConfig:
         self.heartbeat_ms = _int("HEARTBEAT_MS", 5000)
         self.char_delay_ms = _int("CHAR_DELAY_MS", 0)
         self.settle_ms = _int("KEYBOARD_SETTLE_MS", 1000)
+        # Keyboard layout the target expects. "us" uses the built-in Adafruit
+        # layout; any other code (de/uk/fr/...) loads a matching community layout
+        # library, falling back to US at runtime if that library isn't staged.
+        # Absent -> "us", so an old settings.toml keeps typing exactly as before.
+        self.keyboard_layout = (_str("KEYBOARD_LAYOUT", "us") or "us").strip().lower()
         self.backoff_start_ms = _int("RECONNECT_BACKOFF_START_MS", 1000)
         self.backoff_max_ms = _int("RECONNECT_BACKOFF_MAX_MS", 30000)
         # Bound the connect() call so a down hub can't hang the loop (or, with the
@@ -96,6 +101,12 @@ class NodeConfig:
         self.dhcp_maintain_ms = _int("DHCP_MAINTAIN_MS", 1000)
         self.gc_interval_ms = _int("GC_INTERVAL_MS", 1000)
         self.loop_idle_ms = _int("LOOP_IDLE_MS", 5)
+
+        # Over-the-air firmware updates. Needs a filesystem writable to
+        # CircuitPython, which means boot.py hides the USB drive (production
+        # posture). A node only advertises the `ota` capability when this is on
+        # AND the write probe + sha256 lib actually succeed at runtime.
+        self.ota_enabled = _bool("OTA_ENABLED", False)
 
         # Watchdog
         self.watchdog_enabled = _bool("WATCHDOG_ENABLED", True)

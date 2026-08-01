@@ -40,6 +40,48 @@ enumeration/DHCP don't false-trip it), and a unique MAC derived per node id.
 | Medium blink | Ethernet/link problem (cannot bring the network up) |
 | Fast blink | Fatal config or HID error — needs attention; also logs `/error.txt` |
 
+## Keyboard layout
+
+The node types into the target as a USB HID keyboard, and the mapping from a
+character to a keycode is **layout-specific** — it lives in the Adafruit layout
+object *on the node*, not on the hub. A node hardcoded to US typing into a target
+set to a German/UK/French layout mistypes symbols (the classic "my password has a
+`/` and the node typed `-`" bug). So layout is a per-node firmware setting, not
+something the hub can translate.
+
+- Set `KEYBOARD_LAYOUT` in the node's `settings.toml` to the code the target
+  expects (`us`, `de`, `uk`, `fr`, …). **Default `us`**; an absent setting keeps a
+  node typing exactly as before, so old configs are unaffected.
+- `us` (or unset/`en`/`en_us`) uses the built-in `KeyboardLayoutUS`. Any other
+  code lazily imports the matching community library (`keyboard_layout_win_<code>`,
+  which pairs with its own `keycode_win_<code>`). If that library isn't staged on
+  the board, the node **logs a warning and falls back to US** rather than failing —
+  a misconfigured layout degrades to a working keyboard, never a fatal HID error.
+  Make sure the layout library the node needs is installed in its `lib/`.
+- The node reports its **active, resolved** layout in `hello` (e.g. `"layout":"de"`,
+  or `"us"` if a requested layout fell back). The hub keeps it as **read-only**
+  node detail (`layout` on `GET /api/nodes/{id}`) so an operator can see at a glance
+  what each node is set to; old firmware omits it and the hub treats that as `us`.
+
+Only the literal-text (`type` / `send`-as-text) path is layout-sensitive; the
+named-chord path (`keys`, e.g. `CTRL+C`) maps to keycodes directly and is
+unaffected.
+
+## OTA capability
+
+`firmware/circuitpython/otaflash.py` implements over-the-wire firmware updates —
+a chunked, SHA-256-verified file push with a `.bak` backup and an automatic
+watchdog-revert so a bad update self-reverts on the next reset. It is **fully
+wired into the running firmware**: `code.py` imports it, advertises the `ota`
+capability (gated on `OTA_ENABLED` plus a writable filesystem and `adafruit_hashlib`),
+dispatches `ota_begin`/`ota_chunk`/`ota_commit`, and finalizes on a healthy
+heartbeat; `boot.py` calls its boot-time recovery; the `OTA_ENABLED` setting and
+the hub-side push path (bundle store, per-node push, canary rollout) are all in
+place. A node that cannot safely receive OTA never advertises `ota`, so the hub
+never attempts a push to it. The full safety model and the push flow are
+documented in [ota.md](ota.md). An OTA node runs with the filesystem writable
+(USB drive hidden), the same trade-off as `LOG_TO_FILE` below.
+
 ## CircuitPython version rules
 
 - **`.mpy` libraries are per-major-version.** A node running CircuitPython 10.x

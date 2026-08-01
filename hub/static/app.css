@@ -18,3 +18,60 @@ a:hover { color: var(--color-accent-600); }
 
 .nav a { cursor: pointer; }
 .sc-row:hover { background: color-mix(in srgb, var(--color-text) 4%, transparent) !important; }
+
+/* ---- Custom tooltip (data-tip / data-tip-help) -------------------------
+   Singleton box appended to <body>, positioned via JS. Dark ink so it reads
+   over the light UI and matches the serial terminal; the "?" docs link lives
+   INSIDE the box (see .sc-tip-help). */
+.sc-tooltip {
+  position: fixed; top: 0; left: 0; z-index: 3000;
+  display: none; box-sizing: border-box;
+  max-width: 320px; padding: 9px 11px;
+  font-family: var(--font-body); font-size: 13px; line-height: 1.45;
+  color: #f4f1ef;
+  background: #26241f;
+  border: 1px solid color-mix(in srgb, #ffffff 18%, transparent);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(18, 16, 14, 0.38), 0 2px 6px rgba(18, 16, 14, 0.28);
+  opacity: 0; transform: translateY(-3px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.sc-tooltip.sc-tip-on { opacity: 1; transform: none; }
+.sc-tip-text { white-space: normal; overflow-wrap: anywhere; }
+.sc-tip-foot {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, #ffffff 15%, transparent);
+}
+.sc-tip-learn {
+  font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase;
+  color: #c6bfb8;
+}
+.sc-tip-help {
+  margin-left: auto; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 19px; height: 19px; box-sizing: border-box;
+  font-size: 12px; font-weight: 700; line-height: 1;
+  color: #faf8f6; text-decoration: none;
+  background: var(--color-accent); border-radius: 50%;
+  cursor: help; user-select: none;
+  transition: background 0.12s ease;
+}
+.sc-tip-help:hover, .sc-tip-help:focus-visible { background: var(--color-accent-500); color: #fff; }
+.sc-tip-help:focus-visible { outline: 2px solid #faf8f6; outline-offset: 1px; }
+
+/* If the OS is in dark mode, lift the box off pure-dark so it still separates
+   from a dark backdrop. The app palette itself is fixed-light, so this only
+   refines the floating tooltip. */
+@media (prefers-color-scheme: dark) {
+  .sc-tooltip {
+    background: #33302b;
+    border-color: color-mix(in srgb, #ffffff 22%, transparent);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+  }
+}
+:root[data-theme="light"] .sc-tooltip { background: #26241f; }
+:root[data-theme="dark"] .sc-tooltip {
+  background: #33302b;
+  border-color: color-mix(in srgb, #ffffff 22%, transparent);
+}

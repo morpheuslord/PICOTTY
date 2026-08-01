@@ -11,6 +11,7 @@ automated self-test.
     python3 testhub.py --selftest      # run the automated checks, then exit
     python3 testhub.py --selftest --hid # also test keystroke injection (see below)
     python3 testhub.py --token <TOK>   # enforce the node's token (default: accept any)
+    python3 testhub.py --ota <dir>     # push a firmware bundle to the node, then exit
     python3 testhub.py --framecheck    # offline framing unit checks; no node/hardware
 
 IMPORTANT — HID side effects: when the node runs a `type`/`keys`/`sequence`
@@ -18,6 +19,10 @@ command it injects those keystrokes over USB into WHATEVER MACHINE THE PICO IS
 PLUGGED INTO. For a clean test, plug the Pico's USB into a spare machine or VM
 (with a text field focused) and run this tool on a different box. The ping/read/
 config/heartbeat checks have no HID side effects and are always safe.
+
+IMPORTANT — OTA rewrites the node: the `ota <dir>` command and `--ota <dir>` mode
+push a firmware bundle to the connected node, which OVERWRITES its files and soft-
+reloads it onto the new firmware. Only aim it at a node you intend to reflash.
 """
 
 from __future__ import annotations
@@ -74,9 +79,11 @@ class TestHub:
         self.writer = None
         self.node_id = None
         self.caps = []
+        self.layout = None
         self.connected = asyncio.Event()
         self.send_lock = asyncio.Lock()
         self.pending_results = {}   # cmd_id -> Future(dict)
+        self.quiet_cmd_ids = set()  # cmd_ids whose result frame should not be echoed
         self.pending_pongs = {}     # nonce -> Future(rtt_ms)
         self.hb_count = 0
         self.last_hb = None
@@ -113,11 +120,12 @@ class TestHub:
                 pass
 
         self.writer, self.node_id, self.caps = writer, node_id, hello.get("cap", [])
+        self.layout = hello.get("layout")
         self.connected.set()
         tok = GREEN("token ok") if ok_token else YELLOW("token NOT checked")
         print(GREEN("\n== node connected =="))
-        print("  id=%s fw=%s caps=%s from %s (%s)" % (
-            node_id, hello.get("fw"), ",".join(self.caps), addr, tok))
+        print("  id=%s fw=%s caps=%s layout=%s from %s (%s)" % (
+            node_id, hello.get("fw"), ",".join(self.caps), self.layout, addr, tok))
         print(DIM("  type 'help' for commands\n"))
 
         try:
@@ -154,9 +162,14 @@ class TestHub:
             cmd_id = msg.get("cmd_id")
             status = msg.get("status")
             payload = msg.get("payload")
-            col = GREEN if status == "ok" else RED
-            extra = "" if payload is None else "  payload=%r" % payload
-            print("%s <- %s %s (%s)%s" % (hhmmss(), CYAN("result:"), cmd_id, col(status), extra))
+            quiet = cmd_id in self.quiet_cmd_ids
+            self.quiet_cmd_ids.discard(cmd_id)
+            # Quiet results (OTA chunk acks) are handled by their awaiter, not echoed;
+            # a FAILED quiet result is always surfaced so a stuck stream is visible.
+            if not quiet or status != "ok":
+                col = GREEN if status == "ok" else RED
+                extra = "" if payload is None else "  payload=%r" % payload
+                print("%s <- %s %s (%s)%s" % (hhmmss(), CYAN("result:"), cmd_id, col(status), extra))
             fut = self.pending_results.pop(cmd_id, None)
             if fut and not fut.done():
                 fut.set_result(msg)
@@ -189,20 +202,28 @@ class TestHub:
             await self.writer.drain()
         return True
 
-    async def send_command(self, obj, timeout=5.0):
-        """Send a command carrying a cmd_id and await its result."""
+    async def send_command(self, obj, timeout=5.0, quiet=False):
+        """Send a command carrying a cmd_id and await its result.
+
+        `quiet` suppresses the per-send echo — used for OTA chunk streams, which
+        would otherwise print thousands of lines."""
         cmd_id = obj["cmd_id"]
         loop = asyncio.get_event_loop()
         fut = loop.create_future()
         self.pending_results[cmd_id] = fut
-        print("%s -> %s %s" % (hhmmss(), CYAN("send:"), {k: v for k, v in obj.items() if k != "cmd_id"}))
+        if quiet:
+            self.quiet_cmd_ids.add(cmd_id)
+        else:
+            print("%s -> %s %s" % (hhmmss(), CYAN("send:"), {k: v for k, v in obj.items() if k != "cmd_id"}))
         if not await self._send(obj):
             self.pending_results.pop(cmd_id, None)
+            self.quiet_cmd_ids.discard(cmd_id)
             return None
         try:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
             self.pending_results.pop(cmd_id, None)
+            self.quiet_cmd_ids.discard(cmd_id)
             print(RED("  timeout waiting for result of %s" % cmd_id))
             return None
 
@@ -223,6 +244,103 @@ class TestHub:
             self.pending_pongs.pop(nonce, None)
             return None
         return int((recv - sent) * 1000)
+
+    # -- OTA firmware push ---------------------------------------------------
+
+    @staticmethod
+    def _collect_bundle(directory):
+        """Walk <directory> and return a sorted list of (rel_path, bytes) for every
+        file under it. Relative paths use forward slashes so they match the node's
+        drive layout regardless of the host OS."""
+        bundle = []
+        for root, _dirs, names in os.walk(directory):
+            for name in names:
+                full = os.path.join(root, name)
+                rel = os.path.relpath(full, directory).replace(os.sep, "/")
+                with open(full, "rb") as f:
+                    bundle.append((rel, f.read()))
+        bundle.sort(key=lambda item: item[0])
+        return bundle
+
+    async def push_ota(self, directory, warn=True):
+        """Read every file under <directory>, stage it on the connected node with
+        ota_begin/ota_chunk, commit, and report the result. Returns True only if the
+        commit result was ok. The node soft-reloads after a good commit, so a
+        disconnect right after the ok is expected, not a failure."""
+        directory = os.path.abspath(os.path.expanduser(directory))
+        if not os.path.isdir(directory):
+            print(RED("not a directory: %s" % directory))
+            return False
+        if self.writer is None:
+            print(RED("no node connected"))
+            return False
+        bundle = self._collect_bundle(directory)
+        if not bundle:
+            print(RED("no files found under %s" % directory))
+            return False
+        if warn:
+            print(RED("\n!! OTA REWRITES THE NODE'S FIRMWARE FILES AND REBOOTS IT !!"))
+            print(YELLOW("   pushing %d file(s) from %s to node %s" % (
+                len(bundle), directory, self.node_id)))
+            if "ota" not in self.caps:
+                print(YELLOW("   note: node did not advertise the 'ota' capability; "
+                             "it will likely reject this"))
+
+        # Build the manifest: per-file size + sha256, plus a total sha over the
+        # concatenated contents (bundle order) for the whole-bundle check.
+        total = hashlib.sha256()
+        manifest = []
+        for rel, blob in bundle:
+            total.update(blob)
+            manifest.append({
+                "path": rel, "size": len(blob),
+                "sha256": hashlib.sha256(blob).hexdigest(),
+            })
+
+        res = await self.send_command(
+            {"type": "ota_begin", "cmd_id": self._cmd_id(),
+             "files": manifest, "total_sha256": total.hexdigest()}, timeout=15)
+        if not (res and res.get("status") == "ok"):
+            print(RED("  ota_begin failed: %r" % (res.get("payload") if res else None)))
+            return False
+        print(GREEN("  staged %d file(s)" % len(manifest)))
+
+        CHUNK = 512  # bytes per ota_chunk -> 1024 hex chars, well under the frame cap
+        for rel, blob in bundle:
+            seq = 0
+            sent = 0
+            for off in range(0, len(blob), CHUNK):
+                piece = blob[off:off + CHUNK]
+                res = await self.send_command(
+                    {"type": "ota_chunk", "cmd_id": self._cmd_id(),
+                     "path": rel, "seq": seq, "data": piece.hex()},
+                    timeout=15, quiet=True)
+                if not (res and res.get("status") == "ok"):
+                    print(RED("\n  chunk %d of %s failed: %r" % (
+                        seq, rel, res.get("payload") if res else None)))
+                    return False
+                seq += 1
+                sent += len(piece)
+                print("\r  %-24s %6d/%-6d bytes  (%d chunk%s)" % (
+                    rel, sent, len(blob), seq, "" if seq == 1 else "s"),
+                    end="", flush=True)
+            print()  # end the progress line for this file
+
+        print("  committing…")
+        # After a good commit the node writes the pending marker, replies ok, and
+        # soft-reloads — so the ok arrives, then the link drops. A vanished result
+        # (node reloaded before the reply flushed) is inconclusive, not a pass.
+        res = await self.send_command(
+            {"type": "ota_commit", "cmd_id": self._cmd_id()}, timeout=20)
+        if res and res.get("status") == "ok":
+            print(GREEN("  commit ok: %r" % res.get("payload")))
+            print(DIM("  node is soft-reloading; expect a disconnect then a reconnect"))
+            return True
+        if res is None:
+            print(YELLOW("  no commit result (node may have reloaded before replying)"))
+        else:
+            print(RED("  commit failed: %r" % res.get("payload")))
+        return False
 
     # -- interactive REPL ----------------------------------------------------
 
@@ -278,6 +396,11 @@ class TestHub:
                 elif cmd == "reboot":
                     await self._send({"type": "reboot"})
                     print("  reboot sent; node should drop and reconnect")
+                elif cmd == "ota":
+                    if not arg.strip():
+                        print(RED("usage: ota <dir>  (pushes a firmware bundle to the node)"))
+                    else:
+                        await self.push_ota(arg.strip())
                 elif cmd == "selftest":
                     await self.selftest(hid="--hid" in arg)
                 else:
@@ -327,6 +450,12 @@ class TestHub:
         else:
             record("send", True, "skipped (node has no serial_tx capability)")
 
+        # layout: the node must advertise a keyboard layout in its hello frame.
+        record("layout", bool(self.layout), "layout=%s" % (self.layout or "—"))
+        if "ota" in self.caps:
+            print(DIM("  note: node advertises 'ota' — firmware flashing supported "
+                      "(push a bundle with the 'ota <dir>' command or --ota <dir>)"))
+
         # config (no result expected; just confirm no error/disconnect)
         await self._send({"type": "config", "heartbeat_ms": 4000})
         await asyncio.sleep(1)
@@ -362,10 +491,12 @@ HELP = """commands:
   config <ms>       set heartbeat interval
   delay <ms>        per-character delay applied to type/run
   reboot            soft-reboot the node firmware
+  ota <dir>         push every file under <dir> as a firmware bundle, then commit
   selftest [--hid]  run automated checks (add --hid to test keystrokes)
   help              this list
   quit              exit
-note: type/keys/seq inject keystrokes into the machine the Pico is plugged into."""
+note: type/keys/seq inject keystrokes into the machine the Pico is plugged into.
+note: ota REWRITES the node's firmware files and reboots it onto the new build."""
 
 
 # ---- stdin as an async generator (thread-fed) ------------------------------
@@ -403,6 +534,16 @@ async def main_async(args):
                 print(RED("no node connected within %ds" % args.wait))
                 return 2
             ok = await hub.selftest(hid=args.hid)
+            return 0 if ok else 1
+        elif args.ota:
+            # Wait for a node, push the bundle, confirm the commit, exit.
+            print(RED("!! --ota REWRITES THE NODE'S FIRMWARE FILES AND REBOOTS IT !!"))
+            try:
+                await asyncio.wait_for(hub.connected.wait(), timeout=args.wait)
+            except asyncio.TimeoutError:
+                print(RED("no node connected within %ds" % args.wait))
+                return 2
+            ok = await hub.push_ota(args.ota)
             return 0 if ok else 1
         else:
             await hub.repl()
@@ -520,7 +661,8 @@ def main():
     ap.add_argument("--token", help="enforce this node token (default: accept any)")
     ap.add_argument("--selftest", action="store_true", help="run automated checks then exit")
     ap.add_argument("--hid", action="store_true", help="include keystroke-injection checks in --selftest")
-    ap.add_argument("--wait", type=int, default=60, help="seconds to wait for a node in --selftest")
+    ap.add_argument("--ota", metavar="DIR", help="push the firmware bundle under DIR to the node, then exit (REWRITES the node)")
+    ap.add_argument("--wait", type=int, default=60, help="seconds to wait for a node in --selftest/--ota")
     ap.add_argument("--framecheck", action="store_true",
                     help="run offline framing unit checks (no node/hardware) then exit")
     args = ap.parse_args()

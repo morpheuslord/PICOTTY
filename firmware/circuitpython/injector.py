@@ -95,6 +95,26 @@ class Injector:
             raise InjectError("chord has more than %d non-modifier keys" % _MAX_KEYS)
         self._kbd.send(*codes)
 
+    def sysrq(self, command="b"):
+        """Send a Magic SysRq: hold Alt+SysRq, tap the command key, release.
+
+        Unlike send_chord (which presses and releases everything at once), SysRq
+        needs Alt+SysRq held down WHILE the command key is tapped, so it is its own
+        method. `command` is a single key: 'b'=reboot, 'o'=poweroff, 's'=sync,
+        'e'=term, 'i'=kill, 'c'=crash. Requires kernel.sysrq enabled on the target.
+        """
+        if not isinstance(command, str) or len(command.strip()) != 1:
+            raise InjectError("sysrq command must be a single key")
+        key = self._resolve(command.strip())
+        try:
+            self._kbd.press(Keycode.LEFT_ALT)
+            self._kbd.press(Keycode.PRINT_SCREEN)   # PrintScreen == SysRq
+            time.sleep(0.06)
+            self._kbd.press(key)
+            time.sleep(0.06)
+        finally:
+            self._kbd.release_all()
+
     def run_sequence(self, steps, stop_on_error=False):
         """Run an ordered list of steps, returning (ok, detail).
 

@@ -76,6 +76,36 @@ async def stats_broadcaster(hub: Hub):
             pass
 
 
+async def nightly_backup(hub: Hub):
+    """Write a consistent DB snapshot to data/backups/ once a day, keeping the
+    last few. Pairs with the retention pruner: retention bounds size, this bounds
+    the blast radius of a corrupt SD card."""
+    import time
+    from . import config
+    keep = 7
+    backups_dir = config.PROCESS.db_path.parent / "backups"
+    await asyncio.sleep(120)  # let startup settle
+    while True:
+        try:
+            backups_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d")
+            dest = backups_dir / ("hub-%s.db" % stamp)
+            if dest.exists():
+                dest.unlink()
+            await hub.db.backup_to(dest)
+            # Prune all but the newest `keep` snapshots.
+            snaps = sorted(backups_dir.glob("hub-*.db"))
+            for old in snaps[:-keep]:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+            await hub.audit("settings", None, "db snapshot written: %s" % dest.name)
+        except Exception as e:
+            await hub.audit("error", None, "backup error: %s" % e)
+        await asyncio.sleep(86400)
+
+
 async def loop_lag_monitor(hub: Hub):
     """Cheap event-loop lag estimate: measure oversleep on a fixed tick."""
     tick = 0.5

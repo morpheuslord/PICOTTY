@@ -3,12 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Swarm Control</title>
+  <title>PICOTTY SWARM CONTROL</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="app.css">
+  <!-- Vendored-with-fallback progressive enhancements. These are OPTIONAL: they
+       404 harmlessly until an operator runs static/vendor/fetch-vendor.sh on a
+       networked box and copies the pinned files in. app.js feature-detects the
+       globals (window.Terminal, window.AsciinemaPlayer) and falls back to the
+       built-in renderer / a download link when they are absent. No CDN at
+       runtime — the hub lives on an isolated VLAN. -->
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="vendor/asciinema-player.css">
 </head>
 <body>
   <div id="app"></div>
+  <!-- xterm.js console (phase 3): loads before app.js so window.Terminal exists at boot -->
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/xterm-addon-fit.js"></script>
+  <!-- asciinema player for session replay (phase 7) -->
+  <script src="vendor/asciinema-player.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
