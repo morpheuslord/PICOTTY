@@ -52,8 +52,20 @@ and prefer a single clean serial port (and rebuild/redeploy after changing it).
 
 This makes Proxmox **emit** its serial shell to the Pico (the Pico *reads* it).
 To also *type into* that serial shell — including logging in — the Pico must
-**write** to the serial channel. The current firmware types via USB HID, which
-goes to the host's `tty1`, not the serial getty. Driving the serial console
-requires the "send over serial" firmware command (see the project TODO / ask the
-maintainer). HID remains the right tool for BIOS/UEFI and the GRUB menu, where a
-USB keyboard drives the same console that mirrors to serial.
+**write** to the serial channel, which it now does: the firmware's `send` command
+(the dashboard's **Serial** input mode) writes bytes straight into the getty on
+this line, so the console becomes a real interactive serial login. This login
+shell is exactly what the getty above provides; it is a distinct session from the
+host's `tty1`.
+
+Keep the mental split clear:
+
+- **Serial mode** (`send`) drives *this* getty — the interactive Linux login.
+- **HID mode** (`type`/`keys`) drives the host's `tty1`, and BIOS/UEFI and the
+  GRUB menu, where a USB keyboard drives the console that mirrors to serial.
+
+While you watch the Serial console, HID keystrokes appear to do nothing — they are
+landing on `tty1`, not this serial getty. The `send` write path also powers the
+hub's automation (the expect engine and runbooks) and the raw serial bridge
+(`minicom -D tcp:<hub-ip>:<port>`). Serial mode needs the node's firmware to
+advertise `serial_tx`; see the project docs for the full HID-vs-Serial distinction.

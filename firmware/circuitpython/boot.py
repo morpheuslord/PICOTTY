@@ -44,6 +44,37 @@ usb_hid.enable((usb_hid.Device.KEYBOARD,))
 # actively chasing a fault on a node you can't attach a console to.
 import os
 
-if (os.getenv("LOG_TO_FILE") or "").strip().lower() in ("1", "true", "yes", "on"):
+
+def _truthy(name):
+    return (os.getenv(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# OTA needs the filesystem writable to CircuitPython too. Enabling it here has the
+# same trade-off as LOG_TO_FILE: the CIRCUITPY drive goes READ-ONLY over USB. For
+# an OTA node that is fine — you update it over the wire, not by drag-drop — and
+# it is the production posture anyway. Hiding the USB drive (below) is recommended
+# alongside OTA so the target never mounts a stray drive.
+_OTA = _truthy("OTA_ENABLED")
+
+if _truthy("LOG_TO_FILE") or _OTA:
     import storage
     storage.remount("/", readonly=False)
+
+# OTA watchdog-revert: if a firmware update is pending and the LAST boot hung
+# (watchdog reset), the update crash-looped — restore the previous files before
+# the (broken) new code.py runs. Done here, in boot.py, so recovery happens
+# before the suspect firmware is imported. Everything is defensively wrapped: a
+# failure here must never brick the node.
+if _OTA:
+    try:
+        import microcontroller
+        _was_wdt = microcontroller.cpu.reset_reason == microcontroller.ResetReason.WATCHDOG
+    except Exception:
+        _was_wdt = False
+    try:
+        import otaflash
+        _r = otaflash.recover_if_pending(_was_wdt)
+        if _r == "reverted":
+            print("OTA: update crash-looped; reverted to previous firmware")
+    except Exception as _e:
+        print("OTA recovery skipped:", _e)

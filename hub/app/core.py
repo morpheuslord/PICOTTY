@@ -30,6 +30,8 @@ def build_node_frame(cmd_id: str, command: dict) -> dict:
         return frame
     if ctype == "keys":
         return {"type": "keys", "cmd_id": cmd_id, "chord": command.get("chord", [])}
+    if ctype == "sysrq":
+        return {"type": "sysrq", "cmd_id": cmd_id, "key": command.get("key", "b")}
     if ctype == "sequence":
         frame = {"type": "sequence", "cmd_id": cmd_id, "steps": command.get("steps", [])}
         if command.get("stop_on_error"):
@@ -57,6 +59,27 @@ class Hub:
         self.settings: dict = dict(config.DEFAULT_SETTINGS)
         self.started_at = now_ms()
         self.loop_lag_ms = 0
+        # Optional subsystems, set at startup once their tasks/servers are up.
+        # Kept as attributes (not hard imports) so the output hot path can feed
+        # them with a cheap None-check and features stay independently optional.
+        self.expect = None    # expect.ExpectManager (phase 5)
+        self.bridge = None    # serialbridge.SerialBridge (phase 8)
+        self.alerts = None    # alerts.AlertDispatcher (phase 11)
+        self.runbooks = None  # runbook.RunbookRunner (phase 9)
+        self.ota = None       # ota.OTAManager (phase 10)
+        # Per-node lock serializing queue drains: the hello-drain and an
+        # enqueue-triggered drain must not both claim the same pending rows.
+        self._drain_locks: dict = {}
+
+    def feed_expect(self, node_id: str, text: str) -> None:
+        """Hand a fresh output chunk to any running expect job for this node."""
+        if self.expect is not None:
+            self.expect.feed(node_id, text)
+
+    def feed_bridge(self, node_id: str, text: str) -> None:
+        """Mirror a fresh output chunk to any raw-serial-bridge client."""
+        if self.bridge is not None:
+            self.bridge.feed(node_id, text)
 
     async def load_settings(self) -> None:
         self.settings = await self.db.get_settings()
@@ -78,6 +101,10 @@ class Hub:
         self.eventbus.broadcast(
             {"event": "event", "type": type_, "node_id": node_id, "detail": detail, "ts": ts}
         )
+        # Outbound alerting hangs off the audit path: this is the one place every
+        # notable event passes through. Cheap no-op unless alerts are enabled.
+        if self.alerts is not None:
+            self.alerts.on_event(type_, node_id, detail)
 
     async def mark_offline(self, state, reason: str) -> None:
         """Flip a node offline exactly once. Safe if it was already replaced by a
@@ -88,6 +115,16 @@ class Hub:
         state.status = "offline"
         self.registry.remove(node_id)
         await self.db.touch_node(node_id, now_ms())
+        # Fail any awaiting OTA request futures so a push in flight ends promptly
+        # instead of waiting out its timeout.
+        for fut in list(state.pending_results.values()):
+            if not fut.done():
+                fut.set_exception(ConnectionError("node disconnected"))
+        state.pending_results.clear()
+        # Close any raw-serial-bridge clients attached to this node; they'd
+        # otherwise linger with a dead node behind them.
+        if self.bridge is not None:
+            self.bridge.close_clients(node_id)
         await self.audit("node_down", node_id, reason)
         self.eventbus.broadcast({"event": "node_down", "id": node_id, "reason": reason})
 
@@ -134,6 +171,34 @@ class Hub:
         )
         return {"ok": True, "cmd_id": cmd_id, "status": "sent"}
 
+    async def drain_queue(self, node_id: str) -> int:
+        """Deliver any commands staged for a node while it was offline, in issue
+        order, dropping expired ones. Called right after the node registers, so
+        the dashboard already shows it online before queued commands flow.
+        Returns the number delivered.
+
+        Serialized per node so a hello-drain and an enqueue-drain can't both
+        read the same pending rows and deliver them twice."""
+        lock = self._drain_locks.get(node_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._drain_locks[node_id] = lock
+        async with lock:
+            now = now_ms()
+            pending = await self.db.take_pending_queued(node_id, now)
+            delivered = 0
+            for row in pending:
+                res = await self.dispatch_command(node_id, row["payload"], issued_by=row.get("issued_by") or "queue")
+                if res.get("ok"):
+                    await self.db.mark_queued(row["id"], "delivered")
+                    delivered += 1
+                else:
+                    # Node dropped again mid-drain; leave the rest pending for next time.
+                    break
+            if delivered:
+                await self.audit("cmd", node_id, "delivered %d queued command(s) on connect" % delivered)
+            return delivered
+
     async def send_control(self, node_id: str, frame: dict, audit_detail: str = None) -> dict:
         """Send a control frame (reboot/config) that expects no result row."""
         state = self.registry.get(node_id)
@@ -146,6 +211,55 @@ class Hub:
         if audit_detail:
             await self.db.insert_event("cmd", node_id, audit_detail, now_ms())
         return {"ok": True}
+
+    async def bridge_send(self, node_id: str, payload: bytes) -> bool:
+        """Push raw bytes to a node's serial port for the raw serial bridge.
+
+        A deliberately lightweight path: no command row, no inflight, no audit —
+        an interactive serial stream would otherwise flood the DB with a row per
+        keystroke. The cmd_id is prefixed 'b_' so the result handler swallows the
+        node's ack silently. Returns False if the node isn't writable/online."""
+        state = self.registry.get(node_id)
+        if state is None or state.status == "offline":
+            return False
+        # Read-only bridge: a node that can't write serial still streams output
+        # to the client. Silently drop the write but keep the connection alive
+        # (returning True) so the read direction is unaffected.
+        if "serial_tx" not in (state.capabilities or []):
+            return True
+        cmd_id = "b_" + gen_nonce()
+        frame = {"type": "send", "cmd_id": cmd_id, "raw": payload.hex()}
+        try:
+            await self.send_frame(state, frame)
+        except (OSError, ConnectionError):
+            return False
+        return True
+
+    async def request(self, node_id: str, frame: dict, timeout: float = 15.0) -> dict:
+        """Send a command frame and await the node's matching result, WITHOUT a
+        command/inflight DB row. Used by OTA, where a per-chunk command row would
+        flood the DB. The cmd_id is prefixed 'r_' so the result handler routes the
+        reply straight back here. The future is registered before the send, so a
+        fast reply can't be missed."""
+        state = self.registry.get(node_id)
+        if state is None or state.status == "offline":
+            return {"ok": False, "error": "node_offline"}
+        cmd_id = "r_" + gen_nonce()
+        frame = dict(frame)
+        frame["cmd_id"] = cmd_id
+        loop = asyncio.get_event_loop()
+        fut = loop.create_future()
+        state.pending_results[cmd_id] = fut
+        try:
+            await self.send_frame(state, frame)
+            result = await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            state.pending_results.pop(cmd_id, None)
+            return {"ok": False, "error": "timeout"}
+        except (OSError, ConnectionError) as e:
+            state.pending_results.pop(cmd_id, None)
+            return {"ok": False, "error": "send_failed", "detail": str(e)}
+        return {"ok": True, "status": result.get("status"), "payload": result.get("payload"), "result": result}
 
     async def ping_node(self, node_id: str, timeout: float = 2.0):
         """Send a ping and await the matching pong. Returns RTT ms or None."""
@@ -167,6 +281,34 @@ class Hub:
         state.rtt_ms = rtt
         return rtt
 
+    # -- target (attached machine) liveness -----------------------------------
+
+    # A machine is considered alive if it emitted serial output this recently,
+    # even when its firmware doesn't report USB host state.
+    TARGET_OUTPUT_FRESH_MS = 30_000
+
+    def target_state(self, state) -> str:
+        """Liveness of the MACHINE attached to a node, distinct from the node.
+
+        Returns:
+          "up"      — the machine is running (USB host enumerated, or it emitted
+                      serial output within the last ~30s).
+          "down"    — the node is alive but the target's USB host is gone: the
+                      machine is off/hung while the node stays powered (USB standby).
+          "unknown" — the node is offline (so we can't tell — likely no power at
+                      all), or its firmware is too old to report host state and it
+                      has been quiet.
+        """
+        if state is None or state.status == "offline":
+            return "unknown"
+        if state.last_output_at and (now_ms() - state.last_output_at) < self.TARGET_OUTPUT_FRESH_MS:
+            return "up"
+        if state.host_up is True:
+            return "up"
+        if state.host_up is False:
+            return "down"
+        return "unknown"
+
     # -- view merge -----------------------------------------------------------
 
     def merge_node(self, db_row: dict) -> dict:
@@ -180,11 +322,16 @@ class Hub:
             "group": db_row.get("group_name", ""),
             "notes": db_row.get("notes", ""),
             "fw_version": db_row.get("fw_version"),
+            "last_ota": db_row.get("last_ota"),
             "first_seen": db_row.get("first_seen"),
             "last_seen": (state.last_seen if state else db_row.get("last_seen")),
             "status": "online" if online else "offline",
             "ip": state.ip if state else "",
             "capabilities": state.capabilities if state else [],
+            "layout": state.layout if state else "us",
+            "prompt_state": state.prompt_state if online else None,
+            "target": self.target_state(state),
+            "host_up": (state.host_up if online else None),
             "connected_at": state.connected_at if state else None,
             "rtt_ms": state.rtt_ms if online else None,
             "inflight": len(state.inflight) if state else 0,

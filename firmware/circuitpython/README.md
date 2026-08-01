@@ -23,6 +23,7 @@ throughout, a hardware watchdog, and full coverage of every message type.
 | `wire.py` | Length-prefixed JSON framing and a bounded frame reader. |
 | `messages.py` | Builders for every node→hub message. |
 | `nodeconfig.py` | Loads and validates `settings.toml`. |
+| `otaflash.py` | Over-the-wire firmware update machinery (checksummed push, `.bak` + watchdog-revert). Wired into `code.py`/`boot.py` behind the `ota` capability — see the OTA note below. |
 | `settings.toml.example` | Copy to `settings.toml` and edit per node. |
 
 ## Hardware and wiring
@@ -155,6 +156,39 @@ echoes it back, you read the reply — all over the one CDC data channel).
   from old. If the data channel is not enabled in `boot.py`, `send` fails cleanly
   with a clear detail — it never crashes the loop.
 
+## Keyboard layout — `KEYBOARD_LAYOUT`
+
+The node types as a USB HID keyboard, and the character-to-keycode mapping is
+**layout-specific** and lives on the node. A US-configured node typing into a
+target set to a German/UK/French layout mistypes symbols (the classic "the
+password has a `/` and the node sent `-`" bug), so the layout is a per-node
+setting the hub cannot fix for you.
+
+- Set `KEYBOARD_LAYOUT` in `settings.toml` to the target's layout code. Default
+  `us`; an unset value keeps a node typing exactly as before.
+- `us` (or `en`/`en_us`) uses the built-in `KeyboardLayoutUS`. Any other code
+  lazily imports the community library `keyboard_layout_win_<code>` (which needs
+  its paired `keycode_win_<code>` in `lib/`). If that library isn't on the board,
+  the node **logs a warning and falls back to US** — a bad layout degrades to a
+  working keyboard, never a fatal error. Stage the layout your node needs.
+- The node reports its resolved layout in `hello`; the hub shows it read-only in
+  node detail so you can see what each node is set to.
+- Only literal text (`type`, and `send` as text) is layout-sensitive; the
+  named-chord path (`keys`) maps keycodes directly and is unaffected.
+
+## Firmware updates over the wire
+
+`otaflash.py` implements receiving a new firmware bundle over the network and
+swapping it in, with SHA-256 verification, a `.bak` backup of every replaced file,
+and an automatic revert if the new firmware crash-loops (a watchdog reset on the
+next boot restores the `.bak` set). It is **fully wired into `code.py` and
+`boot.py`**: `code.py` imports it, advertises the `ota` capability when
+`OTA_ENABLED` is set and the filesystem is writable with `adafruit_hashlib`
+present, and handles `ota_begin`/`ota_chunk`/`ota_commit` plus finalize-on-healthy;
+`boot.py` runs its boot-time recovery. So an OTA-posture node can be flashed over
+the wire from the dashboard. The safety model and push flow are documented in
+[../../docs/ota.md](../../docs/ota.md).
+
 ## Reboot, reconnect, and liveness
 
 - `reboot` from the hub calls `supervisor.reload()` — it restarts the firmware
@@ -276,8 +310,12 @@ it ever goes dark.
   3 s.
 - **Connected, but no serial output in the console.** The target isn't emitting to
   the serial port — see "The real limitation" above. Typing still works.
-- **Symbols type wrong.** `KeyboardLayoutUS` assumes a US layout. Non-US targets
-  will mis-map some symbols; the chord/keycode path is unaffected.
+- **Symbols type wrong.** The character-to-keycode mapping is layout-specific and
+  defaults to US. If the target is set to a non-US layout, set `KEYBOARD_LAYOUT`
+  (e.g. `"de"`, `"uk"`, `"fr"`) in `settings.toml` and make sure the matching
+  `keyboard_layout_win_<code>` library is in `lib/`; otherwise the node logs a
+  warning and falls back to US. The named-chord path (`keys`) is unaffected. See
+  "Keyboard layout" below.
 
 ## A note on MicroPython
 

@@ -88,6 +88,45 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- Operator-defined quick chords: a labelled key chord pinned as a composer
+-- button (e.g. "VT2" -> CTRL+ALT+F2). Distinct from macros (multi-step sequences).
+CREATE TABLE IF NOT EXISTS chords (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  label      TEXT NOT NULL,
+  chord      TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- Commands staged for an offline node, delivered on its next hello. No FK to
+-- nodes: you may queue for a node the hub has never seen (pre-staged before it
+-- first powers on). status: pending|delivered|expired|cancelled.
+CREATE TABLE IF NOT EXISTS queued_commands (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  node_id    TEXT NOT NULL,
+  type       TEXT NOT NULL,
+  payload    TEXT NOT NULL,
+  issued_by  TEXT,
+  issued_at  INTEGER NOT NULL,
+  expires_at INTEGER,
+  status     TEXT NOT NULL DEFAULT 'pending'
+);
+CREATE INDEX IF NOT EXISTS idx_queued_node ON queued_commands(node_id, id);
+
+-- Runbooks: YAML jobs combining expect steps across a node group (phase 9).
+CREATE TABLE IF NOT EXISTS runbooks (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL,
+  yaml       TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- Per-node raw serial bridge port assignments (phase 8). One TCP port maps to
+-- one node's serial RX/TX so minicom/PuTTY/etc. can attach.
+CREATE TABLE IF NOT EXISTS serial_bridge (
+  node_id TEXT PRIMARY KEY,
+  port    INTEGER NOT NULL UNIQUE
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   username      TEXT NOT NULL UNIQUE,
@@ -130,7 +169,19 @@ class Database:
         await self._db.execute("PRAGMA busy_timeout=3000")
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._db.executescript(SCHEMA)
+        await self._migrate()
         await self._db.commit()
+
+    async def _migrate(self) -> None:
+        """Add columns to existing tables without altering the ones already there.
+        Guarded ALTERs (checked against PRAGMA table_info) keep an already-populated
+        deployment forward-safe."""
+        async with self._db.execute("PRAGMA table_info(nodes)") as cur:
+            cols = {r["name"] for r in await cur.fetchall()}
+        if "last_ota" not in cols:
+            # Which OTA bundle this node was last flashed with (provenance), since
+            # the node's fw_version reflects code.py's FW_VERSION, not the bundle name.
+            await self._db.execute("ALTER TABLE nodes ADD COLUMN last_ota TEXT")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -157,6 +208,11 @@ class Database:
 
     async def touch_node(self, node_id: str, ts: int) -> None:
         await self._db.execute("UPDATE nodes SET last_seen=? WHERE id=?", (ts, node_id))
+        await self._db.commit()
+
+    async def set_last_ota(self, node_id: str, label: str) -> None:
+        """Record the OTA bundle a node was last flashed with (provenance)."""
+        await self._db.execute("UPDATE nodes SET last_ota=? WHERE id=?", (label, node_id))
         await self._db.commit()
 
     async def get_node(self, node_id: str) -> dict:
@@ -288,10 +344,60 @@ class Database:
             async for row in cur:
                 yield row["text"]
 
+    def _output_window_where(self, node_id, since, before):
+        where = ["node_id=?"]
+        args = [node_id]
+        if since is not None:
+            where.append("received_at >= ?"); args.append(since)
+        if before is not None:
+            where.append("received_at < ?"); args.append(before)
+        return " AND ".join(where), args
+
+    async def output_window_start(self, node_id: str, since=None, before=None):
+        """The received_at (ms) of the first output row in the window, or None.
+        Used to anchor asciicast time offsets and the recording's timestamp."""
+        clause, args = self._output_window_where(node_id, since, before)
+        async with self._db.execute(
+            "SELECT MIN(received_at) AS t FROM output_log WHERE " + clause, args
+        ) as cur:
+            row = await cur.fetchone()
+        return row["t"] if row and row["t"] is not None else None
+
+    async def iter_output_window(self, node_id: str, since=None, before=None):
+        """Yield (received_at_ms, text) over a time window, oldest first. This is
+        the source for the asciicast session export."""
+        clause, args = self._output_window_where(node_id, since, before)
+        async with self._db.execute(
+            "SELECT received_at, text FROM output_log WHERE " + clause + " ORDER BY id ASC", args
+        ) as cur:
+            async for row in cur:
+                yield row["received_at"], row["text"]
+
     async def count_output(self) -> int:
         async with self._db.execute("SELECT COUNT(*) AS n FROM output_log") as cur:
             row = await cur.fetchone()
         return row["n"]
+
+    async def search_output(self, query: str, node_id=None, limit=200) -> list:
+        """Find console output containing a substring, newest first. A simple
+        LIKE scan (indexed on node_id/time); good enough to answer "where did that
+        error scroll past" without an FTS table."""
+        where = ["text LIKE ?"]
+        args = ["%" + query + "%"]
+        if node_id:
+            where.append("node_id=?"); args.append(node_id)
+        args.append(limit)
+        sql = ("SELECT id, node_id, cmd_id, text, received_at FROM output_log WHERE "
+               + " AND ".join(where) + " ORDER BY id DESC LIMIT ?")
+        async with self._db.execute(sql, args) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def backup_to(self, dest_path) -> None:
+        """Write a consistent snapshot of the DB via VACUUM INTO. Safe to run on a
+        live WAL database; produces a single compacted file."""
+        await self._db.execute("VACUUM INTO ?", (str(dest_path),))
+        await self._db.commit()
 
     # -- events ---------------------------------------------------------------
 
@@ -368,6 +474,159 @@ class Database:
         d["dangerous"] = bool(d["dangerous"])
         d["group"] = d.pop("group_name", "")
         return d
+
+    # -- queued commands (offline queue) --------------------------------------
+
+    async def enqueue_command(self, node_id, type_, payload: dict, issued_by, issued_at, expires_at) -> int:
+        cur = await self._db.execute(
+            """
+            INSERT INTO queued_commands (node_id, type, payload, issued_by, issued_at, expires_at, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+            """,
+            (node_id, type_, json.dumps(payload), issued_by, issued_at, expires_at),
+        )
+        await self._db.commit()
+        return cur.lastrowid
+
+    async def list_queued(self, node_id: str, status="pending") -> list:
+        async with self._db.execute(
+            "SELECT * FROM queued_commands WHERE node_id=? AND status=? ORDER BY id",
+            (node_id, status),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [self._queued_row(r) for r in rows]
+
+    async def take_pending_queued(self, node_id: str, now: int) -> list:
+        """Return non-expired pending rows for a node in issue order, expiring
+        stale ones in place. The caller dispatches these, then marks each
+        delivered. Expiry is applied here so a late drain never delivers a
+        command past its TTL."""
+        async with self._db.execute(
+            "SELECT * FROM queued_commands WHERE node_id=? AND status='pending' ORDER BY id",
+            (node_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        deliver, expired = [], []
+        for r in rows:
+            if r["expires_at"] is not None and r["expires_at"] < now:
+                expired.append(r["id"])
+            else:
+                deliver.append(self._queued_row(r))
+        if expired:
+            await self._db.executemany(
+                "UPDATE queued_commands SET status='expired' WHERE id=?",
+                [(i,) for i in expired],
+            )
+            await self._db.commit()
+        return deliver
+
+    async def mark_queued(self, qid: int, status: str) -> None:
+        await self._db.execute("UPDATE queued_commands SET status=? WHERE id=?", (status, qid))
+        await self._db.commit()
+
+    async def cancel_queued(self, qid: int) -> int:
+        cur = await self._db.execute(
+            "UPDATE queued_commands SET status='cancelled' WHERE id=? AND status='pending'", (qid,)
+        )
+        await self._db.commit()
+        return cur.rowcount
+
+    @staticmethod
+    def _queued_row(row) -> dict:
+        d = dict(row)
+        d["payload"] = json.loads(d["payload"])
+        return d
+
+    # -- custom chords --------------------------------------------------------
+
+    async def list_chords(self) -> list:
+        async with self._db.execute("SELECT * FROM chords ORDER BY id") as cur:
+            rows = await cur.fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["chord"] = json.loads(d["chord"])
+            out.append(d)
+        return out
+
+    async def create_chord(self, label: str, chord: list) -> int:
+        cur = await self._db.execute(
+            "INSERT INTO chords (label, chord, created_at) VALUES (?, ?, ?)",
+            (label, json.dumps(chord), now_ms()),
+        )
+        await self._db.commit()
+        return cur.lastrowid
+
+    async def update_chord(self, chord_id: int, label=None, chord=None) -> None:
+        sets, args = [], []
+        if label is not None:
+            sets.append("label=?"); args.append(label)
+        if chord is not None:
+            sets.append("chord=?"); args.append(json.dumps(chord))
+        if not sets:
+            return
+        args.append(chord_id)
+        await self._db.execute("UPDATE chords SET %s WHERE id=?" % ", ".join(sets), args)
+        await self._db.commit()
+
+    async def delete_chord(self, chord_id: int) -> None:
+        await self._db.execute("DELETE FROM chords WHERE id=?", (chord_id,))
+        await self._db.commit()
+
+    # -- runbooks -------------------------------------------------------------
+
+    async def list_runbooks(self) -> list:
+        async with self._db.execute("SELECT * FROM runbooks ORDER BY name") as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_runbook(self, rid: int) -> dict:
+        async with self._db.execute("SELECT * FROM runbooks WHERE id=?", (rid,)) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def create_runbook(self, name: str, yaml_text: str) -> int:
+        cur = await self._db.execute(
+            "INSERT INTO runbooks (name, yaml, created_at) VALUES (?, ?, ?)",
+            (name, yaml_text, now_ms()),
+        )
+        await self._db.commit()
+        return cur.lastrowid
+
+    async def update_runbook(self, rid: int, name=None, yaml_text=None) -> None:
+        sets, args = [], []
+        if name is not None:
+            sets.append("name=?"); args.append(name)
+        if yaml_text is not None:
+            sets.append("yaml=?"); args.append(yaml_text)
+        if not sets:
+            return
+        args.append(rid)
+        await self._db.execute("UPDATE runbooks SET %s WHERE id=?" % ", ".join(sets), args)
+        await self._db.commit()
+
+    async def delete_runbook(self, rid: int) -> None:
+        await self._db.execute("DELETE FROM runbooks WHERE id=?", (rid,))
+        await self._db.commit()
+
+    # -- serial bridge port map -----------------------------------------------
+
+    async def assign_bridge_port(self, node_id: str, port: int) -> None:
+        await self._db.execute(
+            "INSERT INTO serial_bridge (node_id, port) VALUES (?, ?) "
+            "ON CONFLICT(node_id) DO UPDATE SET port=excluded.port",
+            (node_id, port),
+        )
+        await self._db.commit()
+
+    async def remove_bridge_port(self, node_id: str) -> None:
+        await self._db.execute("DELETE FROM serial_bridge WHERE node_id=?", (node_id,))
+        await self._db.commit()
+
+    async def list_bridge_ports(self) -> list:
+        async with self._db.execute("SELECT node_id, port FROM serial_bridge ORDER BY port") as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
     # -- settings -------------------------------------------------------------
 

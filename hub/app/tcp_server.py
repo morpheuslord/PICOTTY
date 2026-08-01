@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+from . import classifier
 from .core import Hub
 from .protocol import ProtocolError, read_frame
 from .registry import NodeState
@@ -27,15 +28,31 @@ async def handle_message(hub: Hub, state: NodeState, msg: dict) -> None:
     mtype = msg.get("type")
 
     if mtype == "heartbeat":
-        # Registry-only refresh (already done above); push a compact pulse.
+        # Carry the target-machine liveness the node reported, if any.
+        if "host" in msg:
+            state.host_up = bool(msg.get("host"))
+        # Registry-only refresh (already done above); push a compact pulse that
+        # includes the derived target state so browsers update the machine badge.
         hub.eventbus.broadcast(
-            {"event": "heartbeat", "id": state.node_id, "ts": state.last_seen, "rtt_ms": state.rtt_ms}
+            {"event": "heartbeat", "id": state.node_id, "ts": state.last_seen,
+             "rtt_ms": state.rtt_ms, "target": hub.target_state(state)}
         )
 
     elif mtype == "result":
         cmd_id = msg.get("cmd_id")
         status = msg.get("status", "ok")
         payload = msg.get("payload")
+        # Raw-serial-bridge writes carry a 'b_' cmd_id and no command row; swallow
+        # their acks silently so an interactive stream doesn't flood the audit log.
+        if isinstance(cmd_id, str) and cmd_id.startswith("b_"):
+            return
+        # OTA request/reply carries an 'r_' cmd_id and no command row; hand the
+        # result straight to the awaiting requester (hub.request).
+        if isinstance(cmd_id, str) and cmd_id.startswith("r_"):
+            fut = state.pending_results.pop(cmd_id, None)
+            if fut is not None and not fut.done():
+                fut.set_result(msg)
+            return
         ts = now_ms()
         inflight = state.inflight.pop(cmd_id, None)
         db_id = inflight.db_command_id if inflight else None
@@ -57,11 +74,30 @@ async def handle_message(hub: Hub, state: NodeState, msg: dict) -> None:
     elif mtype == "output":
         text = msg.get("text", "")
         cmd_id = msg.get("cmd_id")
+        # The node's own `ts` is monotonic-from-boot (the Picos have no RTC), so we
+        # ignore it and stamp the hub's wall-clock received_at as the authoritative
+        # time. Node `ts` is advisory ordering only and must never be shown as an
+        # absolute time anywhere.
         ts = now_ms()
+        state.last_output_at = ts  # fresh output => the target machine is alive
         hub.db.append_output(state.node_id, text, ts, cmd_id=cmd_id)  # batched
         hub.eventbus.send_to_subscribers(
             state.node_id, {"event": "output", "id": state.node_id, "ts": ts, "text": text}
         )
+        # Feed the raw serial bridge (if any client is attached to this node).
+        hub.feed_bridge(state.node_id, text)
+        # Update the rolling tail and reclassify where the target is. A changed
+        # prompt-state is a small broadcast so every browser's node badge updates
+        # without subscribing to the console. The expect engine also reads this tail.
+        state.tail = classifier.update_tail(state.tail, text)
+        new_state = classifier.classify(state.tail)
+        if new_state and new_state != state.prompt_state:
+            state.prompt_state = new_state
+            hub.eventbus.broadcast(
+                {"event": "node_state", "id": state.node_id, "prompt_state": new_state, "ts": ts}
+            )
+        # Let any running expect job for this node consume the fresh output.
+        hub.feed_expect(state.node_id, text)
 
     elif mtype == "pong":
         nonce = msg.get("nonce")
@@ -102,6 +138,7 @@ def make_handler(hub: Hub):
                 return
             fw = hello.get("fw", "")
             caps = hello.get("cap", []) or []
+            layout = hello.get("layout") or "us"
             ts = now_ms()
 
             # A reconnect supersedes any prior connection for this id.
@@ -116,12 +153,19 @@ def make_handler(hub: Hub):
             state = NodeState(
                 node_id=node_id, writer=writer, addr=addr,
                 connected_at=ts, last_seen=ts, status="online",
-                fw_version=fw, capabilities=caps,
+                fw_version=fw, capabilities=caps, layout=layout,
             )
             hub.registry.add(state)
             await hub.audit("node_up", node_id, "registered fw %s caps %s" % (fw, ",".join(caps)))
             node_row = await hub.db.get_node(node_id)
             hub.eventbus.broadcast({"event": "node_up", "id": node_id, "meta": hub.merge_node(node_row)})
+
+            # Deliver anything queued for this node while it was offline. Done
+            # after node_up so the browser shows it online before commands flow.
+            try:
+                await hub.drain_queue(node_id)
+            except Exception as e:
+                await hub.audit("error", node_id, "queue drain error: %s" % e)
 
             # Frame loop.
             while True:
