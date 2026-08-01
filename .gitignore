@@ -31,3 +31,8 @@ venv/
 Thumbs.db
 *.swp
 
+
+# Downloaded front-end libs (fetched by hub/static/vendor/fetch-vendor.sh; copy
+# the directory to the hub manually — do not commit the third-party bundles).
+hub/static/vendor/*.js
+hub/static/vendor/*.css
