@@ -92,9 +92,14 @@ if [[ -z "$DEV" || ! -e "$DEV" ]]; then
 fi
 
 if [[ ! -w "$DEV" ]]; then
-  echo "Cannot write to $DEV (permission). Try:  sudo ./wipe-pico.sh --dev $DEV"
-  echo "  (or add yourself to the 'dialout'/'uucp' group and re-login)."
-  exit 1
+  # The REPL port is usually root/dialout-owned; open it up so we can write.
+  echo "==> $DEV is not writable; granting access:  sudo chmod 666 $DEV"
+  sudo chmod 666 "$DEV" || {
+    echo "chmod failed. Run the whole script with sudo, or add yourself to the"
+    echo "'dialout'/'uucp' group and re-login."; exit 1; }
+  if [[ ! -w "$DEV" ]]; then
+    echo "Still not writable after chmod — run: sudo ./wipe-pico.sh --dev $DEV"; exit 1
+  fi
 fi
 
 # --- confirm (destructive) --------------------------------------------------
