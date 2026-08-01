@@ -63,6 +63,53 @@ class MacroRun(BaseModel):
     stagger_ms: Optional[int] = 0
 
 
+class ExpectBody(BaseModel):
+    # A list of steps: action steps ({"type":"send"/"type"/"keys", ...}),
+    # {"delay_ms": n}, or {"wait_for": {"regex", "timeout_ms", "on_timeout"}}.
+    steps: List[dict]
+
+
+class QueueBody(BaseModel):
+    command: CmdBody
+    ttl_ms: Optional[int] = 3_600_000  # default 1h; 0/None -> no expiry
+
+
+class RunbookCreate(BaseModel):
+    name: str
+    yaml: str
+
+
+class RunbookPatch(BaseModel):
+    name: Optional[str] = None
+    yaml: Optional[str] = None
+
+
+class RunbookRun(BaseModel):
+    node_ids: Optional[List[str]] = None
+    group: Optional[str] = None
+    stagger_ms: Optional[int] = 0
+
+
+class OTAFile(BaseModel):
+    path: str
+    content_b64: str
+
+
+class OTABundleCreate(BaseModel):
+    name: str
+    files: List[OTAFile]
+
+
+class OTAPush(BaseModel):
+    bundle: str
+
+
+class OTARollout(BaseModel):
+    node_ids: List[str]
+    bundle: str
+    stagger_ms: Optional[int] = 0
+
+
 class SettingsPatch(BaseModel):
     heartbeat_interval_ms: Optional[int] = None
     stale_timeout_ms: Optional[int] = None
@@ -71,6 +118,10 @@ class SettingsPatch(BaseModel):
     event_retention_days: Optional[int] = None
     require_confirm_dangerous: Optional[bool] = None
     auth_enabled: Optional[bool] = None
+    serial_bridge_enabled: Optional[bool] = None
+    alerts_enabled: Optional[bool] = None
+    alerts_webhook_url: Optional[str] = None
+    alerts_ntfy_url: Optional[str] = None
 
 
 class LoginBody(BaseModel):

@@ -71,15 +71,32 @@ def build_app() -> FastAPI:
         hub = Hub(db, registry, eventbus)
         await hub.load_settings()
         await _ensure_token(hub)
+
+        # Optional subsystems from the improvement plan. Each is independent and
+        # feeds off the existing output/dispatch paths; the hot path guards them
+        # with a None-check so a disabled feature costs nothing.
+        from .expect import ExpectManager
+        hub.expect = ExpectManager(hub)
+        from .alerts import AlertDispatcher
+        hub.alerts = AlertDispatcher(hub)
+        from .serialbridge import SerialBridge
+        hub.bridge = SerialBridge(hub)
+        from .runbook import RunbookRunner
+        hub.runbooks = RunbookRunner(hub)
+        from .ota import OTAManager
+        hub.ota = OTAManager(hub)
+
         app.state.hub = hub
 
         app.state.tcp_server = await start_tcp_server(hub)
+        await hub.bridge.start()  # binds per-node listeners only if enabled
         app.state.bg_tasks = [
             asyncio.create_task(bg.liveness_sweep(hub)),
             asyncio.create_task(bg.output_flusher(hub)),
             asyncio.create_task(bg.retention_pruner(hub)),
             asyncio.create_task(bg.stats_broadcaster(hub)),
             asyncio.create_task(bg.loop_lag_monitor(hub)),
+            asyncio.create_task(bg.nightly_backup(hub)),
         ]
         print("hub: swarm TCP on %s:%d, web on %s:%d" % (
             config.PROCESS.tcp_host, config.PROCESS.tcp_port,
@@ -99,6 +116,9 @@ def build_app() -> FastAPI:
                 await server.wait_closed()
         hub = getattr(app.state, "hub", None)
         if hub is not None:
+            if hub.bridge is not None:
+                with contextlib.suppress(Exception):
+                    await hub.bridge.stop()
             await hub.db.close()
 
     app.include_router(rest_router, prefix="/api")

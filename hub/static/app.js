@@ -94,6 +94,13 @@
     settings: {},
     toasts: [],
     dialog: null,
+    bridge: { enabled: false, bind: "", ports: [] }, // serial bridge map (phase 8)
+    expectJobs: {},   // nodeId -> {job_id,step,total,phase,detail} (phase 5)
+    runbooks: [],     // {id,name,yaml} (phase 9)
+    runbookRuns: {},  // run_id -> {name,nodes:{id:status}} (phase 9)
+    selRunbook: null,
+    bundles: [],      // OTA firmware bundles [{name,files:[path],total_sha256,created_at}] (phase 12)
+    otaJobs: {},      // nodeId -> {job_id,bundle,status,phase,sent_bytes,total_bytes,detail} (phase 12)
   };
   const ui = {};        // live DOM refs for the nodes view
   const KEY_ALIASES = { "↑": "UP_ARROW", "↓": "DOWN_ARROW", "→": "RIGHT_ARROW", "←": "LEFT_ARROW",
@@ -107,16 +114,49 @@
   // (sendNewline, charDelay, wrap, …). Serial requires the node's firmware to
   // advertise the `serial_tx` capability; without it we fall back to HID.
   const nodeHasSerialTx = (n) => !!(n && String(n.caps || "").split(",").includes("serial_tx"));
+  // OTA firmware update (phase 12): the node's firmware must advertise the `ota`
+  // capability, checked the same way as serial_tx above.
+  const nodeHasOta = (n) => !!(n && String(n.caps || "").split(",").includes("ota"));
   const inputMode = (id) => (id && state.inputModes[id]) || "hid";
   const setInputMode = (id, m) => { if (id) state.inputModes[id] = m; };
   const effectiveMode = (n) => (nodeHasSerialTx(n) && inputMode(n && n.id) === "serial") ? "serial" : "hid";
+
+  // ---- prompt-state badge (phase 4) --------------------------------------
+  // The hub classifies each online node's tail into a coarse prompt_state and
+  // pushes changes over WS ({event:"node_state"}). We colour a tiny badge per
+  // row; a null/absent state renders nothing.
+  const PROMPT_BADGE = {
+    panic:    { bg: "var(--color-accent)",      fg: "#faf8f6" },
+    shell:    { bg: "#3f9e63",                   fg: "#f4fbf6" },
+    login:    { bg: "#c98a00",                   fg: "#1b1918" },
+    password: { bg: "#c98a00",                   fg: "#1b1918" },
+    grub:     { bg: "#3a6ea5",                   fg: "#eef4fb" },
+    booting:  { bg: "#3a6ea5",                   fg: "#eef4fb" },
+  };
+  function promptBadge(stateName, opts) {
+    const c = PROMPT_BADGE[stateName];
+    if (!c) return null;
+    const pad = (opts && opts.big) ? "2px 8px" : "0 6px";
+    const fs = (opts && opts.big) ? "11px" : "10px";
+    return h("span", { title: "prompt: " + stateName,
+      style: "flex:none;padding:" + pad + ";font-size:" + fs + ";font-weight:600;letter-spacing:0.02em;background:" + c.bg + ";color:" + c.fg }, stateName);
+  }
+
+  // ---- serial bridge (phase 8) -------------------------------------------
+  const bridgePortFor = (nodeId) => {
+    const row = (state.bridge.ports || []).find((p) => p.node_id === nodeId);
+    return row ? row.port : null;
+  };
 
   // ---- console helpers ---------------------------------------------------
   function pushLine(nodeId, kind, text) {
     const cur = state.consoles[nodeId] || (state.consoles[nodeId] = []);
     cur.push({ ts: now(), kind, text });
     if (cur.length > CONSOLE_CAP) cur.splice(0, cur.length - CONSOLE_CAP);
-    if (state.view === "nodes" && nodeId === state.selId) appendConsoleLine(cur[cur.length - 1]);
+    if (state.view === "nodes" && nodeId === state.selId) {
+      if (xtermActive()) xtermMeta(kind, text);
+      else appendConsoleLine(cur[cur.length - 1]);
+    }
   }
 
   // Streaming target output. Unlike pushLine (one COMPLETE line per call), serial
@@ -138,7 +178,12 @@
     if (cur.length > CONSOLE_CAP) cur.splice(0, cur.length - CONSOLE_CAP);
     if (render && state.view === "nodes" && nodeId === state.selId) scheduleConsoleRebuild();
   }
-  const pushOutput = (nodeId, text) => pushOutputInto(nodeId, text, now(), true);
+  // Feed target output to the live surface: raw bytes to xterm (a real emulator),
+  // or the coalesced DOM log fallback. The buffer is always kept for both.
+  const pushOutput = (nodeId, text) => {
+    pushOutputInto(nodeId, text, now(), !xtermActive());
+    if (xtermActive() && nodeId === state.selId && ui.xterm) ui.xterm.write(String(text == null ? "" : text));
+  };
 
   // Coalesce bursts (a screenful of output = many frames) into one DOM rebuild
   // per animation frame, so a chatty target never thrashes the console.
@@ -194,6 +239,58 @@
     if (ui.term && state.autoscroll) requestAnimationFrame(() => { ui.term.scrollTop = ui.term.scrollHeight; });
   }
 
+  // ---- xterm.js progressive enhancement (phase 3) ------------------------
+  // Vendored-with-fallback: index.html references vendor/xterm.* which 404
+  // harmlessly until an operator runs fetch-vendor.sh. Only when window.Terminal
+  // is defined do we mount a real terminal; otherwise the DOM log above is used,
+  // completely unchanged. ui.xterm holds the live instance (null when inactive).
+  const xtermAvailable = () => typeof window.Terminal === "function";
+  const xtermActive = () => !!ui.xterm;
+  function xtermMeta(kind, text) {
+    if (!ui.xterm) return;
+    const pfx = kind === "in" ? "\x1b[38;5;209m› \x1b[0m" : kind === "err" ? "\x1b[31m! \x1b[0m" : kind === "sys" ? "\x1b[90m· \x1b[0m" : "";
+    ui.xterm.write(pfx + String(text == null ? "" : text) + "\r\n");
+  }
+  function xtermReplay() {
+    if (!ui.xterm) return;
+    const lines = state.consoles[state.selId] || [];
+    let s = "";
+    for (const l of lines) {
+      if (l.kind === "out") { s += l.text; if (!l.open) s += "\r\n"; }
+      else { s += (l.kind === "in" ? "\x1b[38;5;209m› \x1b[0m" : l.kind === "err" ? "\x1b[31m! \x1b[0m" : "\x1b[90m· \x1b[0m") + l.text + "\r\n"; }
+    }
+    ui.xterm.write(s);
+  }
+  function disposeXterm() { if (ui.xterm) { try { ui.xterm.dispose(); } catch (e) {} } ui.xterm = null; ui.xtermFit = null; }
+  function setupXterm() {
+    disposeXterm();
+    try {
+      ui.xterm = new window.Terminal({
+        convertEol: false, cursorBlink: true, scrollback: 5000, fontSize: 12.5,
+        fontFamily: "ui-monospace,'SF Mono',Menlo,Consolas,monospace",
+        theme: { background: "#1b1918", foreground: "#c9c4c0", cursor: "#d94f2b" },
+      });
+      const FA = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon);
+      if (typeof FA === "function") { ui.xtermFit = new FA(); ui.xterm.loadAddon(ui.xtermFit); }
+      ui.xterm.open(ui.xtermHost);
+      if (ui.xtermFit) { try { ui.xtermFit.fit(); } catch (e) {} }
+      xtermReplay();
+      // Serial mode: stream keystrokes straight to the getty. HID mode leaves the
+      // terminal read-only (the HID composer is the input path there).
+      ui.xterm.onData((d) => { const n = sel(); if (n && n.status === "online" && effectiveMode(n) === "serial") postSend(n.id, { data: d }); });
+    } catch (e) { disposeXterm(); rebuildConsole(); }
+  }
+  // Single entry point used everywhere the console must (re)draw for the current
+  // selection — picks the xterm path or the DOM-log path.
+  function mountConsole() {
+    if (ui.xtermHost && xtermAvailable()) setupXterm();
+    else rebuildConsole();
+  }
+  function refreshConsole() {
+    if (ui.xterm) { try { ui.xterm.reset(); } catch (e) {} xtermReplay(); }
+    else rebuildConsole();
+  }
+
   // ---- toasts + dialog ---------------------------------------------------
   let seq = 1;
   function toast(kind, text) {
@@ -245,7 +342,7 @@
   }
 
   function renderNav() {
-    const links = [["nodes", "Nodes"], ["macros", "Macros"], ["events", "Events"], ["settings", "Settings"]].map(([k, label]) =>
+    const links = [["nodes", "Nodes"], ["macros", "Macros"], ["runbooks", "Runbooks"], ["events", "Events"], ["settings", "Settings"]].map(([k, label]) =>
       h("a", { "aria-current": state.view === k ? "page" : null, onClick: (e) => { e.preventDefault(); switchView(k); } }, label));
     const wsColor = state.ws === "live" ? "#3f9e63" : state.ws === "connecting" ? "#c98a00" : "#c94b39";
     const wsLabel = state.ws === "live" ? "WS live" : state.ws === "connecting" ? "connecting…" : "offline";
@@ -282,10 +379,12 @@
   function renderView() {
     const v = $("view");
     if (!v) return;
+    disposeXterm();   // tear down any live terminal before the view host is cleared
     for (const k in ui) delete ui[k];
     v.innerHTML = "";
     if (state.view === "nodes") v.appendChild(buildNodesView());
     else if (state.view === "macros") v.appendChild(buildMacrosView());
+    else if (state.view === "runbooks") v.appendChild(buildRunbooksView());
     else if (state.view === "events") v.appendChild(buildEventsView());
     else if (state.view === "settings") v.appendChild(buildSettingsView());
   }
@@ -296,7 +395,7 @@
     if (state.leftOpen) wrap.appendChild(buildLeftRail());
     wrap.appendChild(buildCenter());
     if (state.rightOpen) wrap.appendChild(buildRightRail());
-    setTimeout(() => { renderNodeList(); rebuildConsole(); }, 0);
+    setTimeout(() => { renderNodeList(); mountConsole(); }, 0);
     return wrap;
   }
 
@@ -334,6 +433,7 @@
           h("span", { style: "width:9px;height:9px;border-radius:50%;flex:none;background:" + (on ? "#3f9e63" : "transparent") + ";border:" + (on ? "none" : "2px solid #8c8683") + ";animation:" + (n.inflight > 0 ? "sc-pulse 1s infinite" : "none") }),
           h("span", { style: "font-family:ui-monospace,Menlo,monospace;font-size:13px;font-weight:600" }, n.id),
           h("span", { style: "font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-neutral-700)" }, n.label),
+          (on ? promptBadge(n.promptState) : null),
           h("span", { style: "margin-left:auto;font-size:11px;color:var(--color-neutral-600);flex:none" }, rel(n.lastSeen))),
         h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:4px;padding-left:17px" },
           h("span", { class: "tag tag-neutral", style: "padding:1px 7px" }, n.group || "—"),
@@ -362,10 +462,22 @@
     ui.term = h("div", { class: "sc-term", style: "flex:1;min-height:0;overflow-y:auto;background:#1b1918;padding:var(--space-3) var(--space-4);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px;line-height:1.6",
       onScroll: (e) => { const el = e.target; const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 24; if (atEnd !== state.autoscroll) { state.autoscroll = atEnd; if (ui.autoBtn) ui.autoBtn.textContent = atEnd ? "Autoscroll on" : "Autoscroll off"; } } });
 
+    // Phase 3: progressive xterm.js surface. When window.Terminal is present
+    // (vendored), the real terminal mounts into ui.xtermHost and ui.term stays
+    // detached as the fallback buffer. Without it, ui.term is the live surface.
+    let surface = ui.term;
+    if (xtermAvailable()) { ui.xtermHost = h("div", { class: "sc-term", style: "flex:1;min-height:0;overflow:hidden;background:#1b1918;padding:4px 6px" }); surface = ui.xtermHost; }
+
+    ui.expectBar = h("div", { style: "flex:none" });   // phase 5 live expect progress
+    renderExpectBar();
+
+    ui.otaBar = h("div", { style: "flex:none" });       // phase 12 live OTA progress
+    renderOtaBar();
+
     ui.composerHost = h("div", { style: "flex:none" });
     renderComposer();
     return h("div", { style: "flex:1;display:flex;flex-direction:column;min-width:0;min-height:0" },
-      ui.header, termBar, ui.term, ui.composerHost);
+      ui.header, termBar, surface, ui.expectBar, ui.otaBar, ui.composerHost);
   }
 
   // Rebuild the composer in place. Called on node select and on input-mode
@@ -386,13 +498,24 @@
       h("div", { style: "display:flex;align-items:baseline;gap:10px;min-width:0" },
         h("h3", { style: "margin:0;font-family:ui-monospace,Menlo,monospace" }, s.id || "—"),
         h("span", { style: "font-size:14px;color:var(--color-neutral-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" }, s.label || ""),
-        h("span", { class: "tag " + (online ? "tag-accent" : "tag-neutral") }, online ? "online" : "offline")),
+        h("span", { class: "tag " + (online ? "tag-accent" : "tag-neutral") }, online ? "online" : "offline"),
+        (online ? promptBadge(s.promptState, { big: true }) : null)),
       h("div", { style: "display:flex;flex-wrap:wrap;gap:2px var(--space-4);font-size:12px;color:var(--color-neutral-700);font-family:ui-monospace,Menlo,monospace;overflow:hidden" },
         h("span", {}, s.ip || ""), h("span", {}, "fw " + (s.fw || "")), h("span", {}, "rtt " + (online ? (s.rttMs != null ? s.rttMs + "ms" : "—") : "—")),
-        h("span", {}, "caps " + (s.caps || "")), h("span", {}, "group " + (s.group || "")))));
-    host.appendChild(h("div", { style: "flex:none;margin-left:auto;display:flex;align-items:center;gap:var(--space-2);padding:0 var(--space-4);white-space:nowrap" },
+        h("span", {}, "caps " + (s.caps || "")), h("span", {}, "group " + (s.group || "")),
+        h("span", {}, "kbd: " + (s.layout || "us")),                     // phase 1: read-only layout
+        (bridgePortFor(s.id) != null                                     // phase 8: bridge endpoint
+          ? h("span", { style: "color:var(--color-accent-700)" }, "serial bridge: " + (state.bridge.bind || "0.0.0.0") + ":" + bridgePortFor(s.id))
+          : null))));
+    const hasNode = !!s.id;
+    host.appendChild(h("div", { style: "flex:none;margin-left:auto;display:flex;align-items:center;gap:var(--space-2);padding:6px var(--space-4);flex-wrap:wrap;justify-content:flex-end" },
       h("button", { class: "btn btn-secondary", onClick: doPing }, "Ping"),
       h("button", { class: "btn btn-secondary", onClick: doRead }, "Read serial"),
+      h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openExpectBuilder(s.id) }, "Expect"),      // phase 5
+      h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openQueueSheet(s.id) }, "Queue"),         // phase 6
+      h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openReplay(s.id) }, "Replay"),            // phase 7
+      h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openBridgeSheet(s.id) }, "Bridge"),       // phase 8
+      (nodeHasOta(s) ? h("button", { class: "btn btn-secondary", disabled: !hasNode, onClick: () => openOtaSheet(s.id) }, "Firmware") : null),  // phase 12
       h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", onClick: doRebootNode }, "Reboot node")));
   }
 
@@ -776,6 +899,8 @@
     }
     const toggles = [
       ["require_confirm_dangerous", "Require confirm for destructive keys", "CTRL+ALT+DEL, SysRq and reboot prompt first"],
+      ["serial_bridge_enabled", "Serial bridge listeners", "Expose assigned nodes' raw serial over TCP (minicom -D tcp:hub:port)"],
+      ["alerts_enabled", "Alerts", "Notify on node down / panic via webhook or ntfy"],
     ];
     const toggleWrap = h("div", { style: "padding:var(--space-3) var(--space-4)" },
       h("div", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:var(--space-2)" }, "Safety"));
@@ -786,12 +911,23 @@
           h("span", { style: "display:block;font-size:14px;font-weight:600" }, label),
           h("span", { style: "display:block;font-size:12px;color:var(--color-neutral-700)" }, hint))));
     }
+    // Alerts endpoints (phase 11) — plain text inputs bound into `edited`.
+    edited.alerts_webhook_url = s.alerts_webhook_url || "";
+    edited.alerts_ntfy_url = s.alerts_ntfy_url || "";
+    const alertsBlock = h("div", { style: "padding:var(--space-3) var(--space-4);border-top:1px solid var(--color-divider)" },
+      h("div", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:var(--space-2)" }, "Alert endpoints"),
+      h("div", { class: "field", style: "margin-bottom:var(--space-3)" },
+        h("label", {}, "Webhook URL (POST JSON)"),
+        h("input", { class: "input", type: "text", value: edited.alerts_webhook_url, placeholder: "https://…", onInput: (e) => { edited.alerts_webhook_url = e.target.value; } })),
+      h("div", { class: "field" },
+        h("label", {}, "ntfy topic URL"),
+        h("input", { class: "input", type: "text", value: edited.alerts_ntfy_url, placeholder: "https://ntfy.sh/your-topic", onInput: (e) => { edited.alerts_ntfy_url = e.target.value; } })));
     return h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
       h("div", { style: "padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider);display:flex;align-items:center;gap:var(--space-3)" },
         h("div", { style: "min-width:0" }, h("h4", { style: "margin:0" }, "Settings"),
           h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "hub configuration — live values apply immediately; port changes need a restart")),
         h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", onClick: () => saveSettings(edited) }, "Save config")),
-      grid, toggleWrap);
+      grid, toggleWrap, alertsBlock);
   }
 
   async function saveSettings(edited) {
@@ -801,6 +937,10 @@
     if (edited.outputRetention != null) patch.output_retention_days = Number(edited.outputRetention);
     if (edited.eventRetention != null) patch.event_retention_days = Number(edited.eventRetention);
     if (edited.require_confirm_dangerous != null) patch.require_confirm_dangerous = !!edited.require_confirm_dangerous;
+    if (edited.serial_bridge_enabled != null) patch.serial_bridge_enabled = !!edited.serial_bridge_enabled;   // phase 8
+    if (edited.alerts_enabled != null) patch.alerts_enabled = !!edited.alerts_enabled;                        // phase 11
+    if (edited.alerts_webhook_url != null) patch.alerts_webhook_url = String(edited.alerts_webhook_url);
+    if (edited.alerts_ntfy_url != null) patch.alerts_ntfy_url = String(edited.alerts_ntfy_url);
     if (state.demo) { Object.assign(state.settings, patch); toast("Saved", "Demo mode — not persisted"); return; }
     try { const r = await patchJSON("/settings", patch); state.settings = r.settings; toast("Saved", "Hub config written"); }
     catch (e) { toast("Failed", "Could not save settings"); }
@@ -817,7 +957,7 @@
     state.selId = id;
     state.input = "";
     serialBuf = "";  // don't carry a half-typed serial line across node switches
-    if (state.view === "nodes") { renderNodeList(); renderHeaderInto(ui.header); renderComposer(); rebuildConsole(); }
+    if (state.view === "nodes") { renderNodeList(); renderHeaderInto(ui.header); renderComposer(); renderExpectBar(); renderOtaBar(); refreshConsole(); }
     if (!state.demo) { wsSend({ type: "subscribe", node_id: id }); backfillNode(id); }
   }
   // Rebuild the composer to reflect the selected node's current online/mode/caps.
@@ -829,7 +969,7 @@
       for (const c of (out.chunks || [])) pushOutputInto(id, c.text, c.ts, false);
       const cmds = await getJSON("/nodes/" + encodeURIComponent(id) + "/commands?limit=40");
       // merge node-scoped commands into history view (keep global list too)
-      if (state.view === "nodes" && id === state.selId) rebuildConsole();
+      if (state.view === "nodes" && id === state.selId) refreshConsole();
     } catch (e) { /* offline */ }
   }
 
@@ -994,10 +1134,664 @@
 
   const toggleAutoscroll = () => { state.autoscroll = !state.autoscroll; if (ui.autoBtn) ui.autoBtn.textContent = state.autoscroll ? "Autoscroll on" : "Autoscroll off"; scrollDown(); };
   const toggleWrap = () => { state.wrap = !state.wrap; if (ui.wrapBtn) ui.wrapBtn.textContent = state.wrap ? "Wrap on" : "Wrap off"; rebuildConsole(); };
-  const clearConsole = () => { state.consoles[state.selId] = []; rebuildConsole(); };
+  const clearConsole = () => { state.consoles[state.selId] = []; refreshConsole(); };
   function downloadLog() {
     if (state.demo) { toast("Saved", state.selId + "-console.log (demo)"); return; }
     window.open("/api/nodes/" + encodeURIComponent(state.selId) + "/output/download", "_blank");
+  }
+
+  // ---- reusable modal sheet ----------------------------------------------
+  // Same look as the macro editor, factored for the phase 5-9 dialogs.
+  function openSheet(id, title, bodyNode, actions, width) {
+    closeSheet(id);
+    const card = h("div", { class: "dialog", style: "width:min(" + (width || 700) + "px,94vw);max-height:90vh;display:flex;flex-direction:column", onClick: (e) => e.stopPropagation() },
+      h("div", { class: "dialog-title" }, title),
+      h("div", { class: "dialog-body", style: "display:flex;flex-direction:column;gap:14px;overflow-y:auto", id: id + "-body" }, bodyNode),
+      h("div", { class: "dialog-actions" }, ...(actions || [])));
+    const backdrop = h("div", { id, class: "dialog-backdrop", style: "z-index:120", onClick: () => closeSheet(id) }, card);
+    document.body.appendChild(backdrop);
+    return backdrop;
+  }
+  const closeSheet = (id) => { const el = $(id); if (el) el.remove(); };
+
+  // ---- Expect builder + live progress (phase 5) --------------------------
+  function renderExpectBar() {
+    if (!ui.expectBar) return;
+    ui.expectBar.innerHTML = "";
+    const job = state.expectJobs[state.selId];
+    if (!job) return;
+    const TERMINAL = { done: 1, failed: 1, cancelled: 1, timeout: 1 };
+    const running = !TERMINAL[job.status] && !TERMINAL[job.phase];
+    const bad = job.status === "failed" || job.status === "timeout" || job.phase === "failed" || job.phase === "timeout";
+    const pct = job.total ? Math.round((job.step / job.total) * 100) : 0;
+    const col = bad ? "var(--color-accent)" : running ? "var(--color-accent-600)" : "#3f9e63";
+    ui.expectBar.appendChild(h("div", { style: "border-top:1px solid var(--color-divider);padding:6px var(--space-4);display:flex;align-items:center;gap:var(--space-3);background:var(--color-surface)" },
+      h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);flex:none" }, "Expect"),
+      h("span", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px;flex:none" }, "step " + job.step + "/" + job.total),
+      h("div", { style: "flex:1;height:6px;background:var(--color-neutral-300);min-width:60px" }, h("div", { style: "height:100%;width:" + pct + "%;background:" + col })),
+      h("span", { style: "font-size:11px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, (job.phase || "") + (job.detail ? " · " + job.detail : "")),
+      running && job.job_id
+        ? h("button", { class: "btn btn-ghost", style: "flex:none;font-size:11px;color:var(--color-accent)", onClick: () => cancelExpect(state.selId, job.job_id) }, "Cancel")
+        : h("button", { class: "btn btn-ghost", style: "flex:none;font-size:11px", onClick: () => { delete state.expectJobs[state.selId]; renderExpectBar(); } }, "Dismiss")));
+  }
+  async function cancelExpect(nodeId, jobId) {
+    if (state.demo) { const j = state.expectJobs[nodeId]; if (j) { j.status = "cancelled"; j.phase = "cancelled"; } renderExpectBar(); return; }
+    try { await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/expect/" + encodeURIComponent(jobId) + "/cancel"); }
+    catch (e) { toast("Failed", "could not cancel expect job"); }
+  }
+
+  // Steps are the exact shapes the hub's expect engine parses: action
+  // ({type:send/type/keys}), {delay_ms}, or {wait_for:{regex,timeout_ms,on_timeout}}.
+  function openExpectBuilder(nodeId) {
+    const steps = [];
+    const listHost = h("div", { class: "sc-scroll", style: "max-height:230px;overflow-y:auto;border:1px solid var(--color-divider)" });
+    function expectStepLabel(st) {
+      if (st.wait_for) return { op: "WAIT", arg: "/" + st.wait_for.regex + "/ " + st.wait_for.timeout_ms + "ms · " + st.wait_for.on_timeout };
+      if (st.delay_ms != null) return { op: "DELAY", arg: st.delay_ms + "ms" };
+      if (st.type === "send") return { op: "SEND", arg: (st.data || "").replace(/\r?\n/g, "⏎") };
+      if (st.type === "type") return { op: "TYPE", arg: (st.text || "").replace(/\n/g, "⏎") };
+      if (st.type === "keys") return { op: "KEYS", arg: (st.chord || []).join("+") };
+      return { op: "?", arg: JSON.stringify(st) };
+    }
+    function renderList() {
+      listHost.innerHTML = "";
+      if (!steps.length) { listHost.appendChild(h("div", { style: "padding:14px;font-size:12px;color:var(--color-neutral-600);text-align:center" }, "No steps yet — add an action or a wait-for below.")); return; }
+      steps.forEach((st, i) => {
+        const d = expectStepLabel(st);
+        const swap = (delta) => { const j = i + delta; if (j < 0 || j >= steps.length) return; const t = steps[i]; steps[i] = steps[j]; steps[j] = t; renderList(); };
+        listHost.appendChild(h("div", { style: "display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--color-divider)" },
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600);width:20px;flex:none" }, String(i + 1).padStart(2, "0")),
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:12px;font-weight:600;width:52px;flex:none;color:" + (d.op === "WAIT" ? "var(--color-accent-700)" : "var(--color-neutral-700)") }, d.op),
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:12px;min-width:0;flex:1;word-break:break-all" }, d.arg),
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px", onClick: () => swap(-1) }, "↑"),
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px", onClick: () => swap(1) }, "↓"),
+          h("button", { class: "btn btn-ghost", style: "padding:0 6px;color:var(--color-accent)", onClick: () => { steps.splice(i, 1); renderList(); } }, "×")));
+      });
+    }
+    // action composer
+    const sendTxt = h("input", { class: "input", style: "flex:1;min-width:160px;font-family:ui-monospace,monospace", placeholder: "send text, e.g.  root\\n  (\\n = newline)" });
+    const addSend = () => { const v = sendTxt.value; if (!v) return; steps.push({ type: "send", data: v.replace(/\\n/g, "\n").replace(/\\t/g, "\t") }); sendTxt.value = ""; renderList(); };
+    const reInput = h("input", { class: "input", style: "flex:1;min-width:140px;font-family:ui-monospace,monospace", placeholder: "wait-for regex, e.g.  login:" });
+    const toMs = h("input", { class: "input", type: "number", min: "0", step: "500", value: "8000", style: "width:96px" });
+    const onTo = h("select", { class: "input", style: "width:110px" }, h("option", { value: "fail" }, "fail"), h("option", { value: "continue" }, "continue"));
+    const addWait = () => { const rx = reInput.value; if (!rx) return; steps.push({ wait_for: { regex: rx, timeout_ms: Math.max(0, Number(toMs.value) || 0), on_timeout: onTo.value } }); reInput.value = ""; renderList(); };
+    const delMs = h("input", { class: "input", type: "number", min: "0", step: "100", value: "500", style: "width:96px" });
+
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
+      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Ordered steps run on ", h("b", {}, nodeId), " — actions alternate with wait-for matches on the node's live output."),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Steps"), listHost),
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
+        kicker("Send"), sendTxt, h("button", { class: "btn btn-secondary", onClick: addSend }, "Add send")),
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
+        kicker("Wait"), reInput,
+        h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:5px" }, "timeout", toMs, "ms"),
+        onTo, h("button", { class: "btn btn-secondary", onClick: addWait }, "Add wait-for")),
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
+        kicker("Delay"), h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:5px" }, "wait", delMs, "ms"),
+        h("button", { class: "btn btn-secondary", onClick: () => { steps.push({ delay_ms: Math.max(0, Number(delMs.value) || 0) }); renderList(); } }, "Add delay")));
+
+    async function run() {
+      if (!steps.length) { toast("Failed", "Add at least one step"); return; }
+      if (state.demo) { closeSheet("expect-sheet"); runExpectDemo(nodeId, steps.slice()); return; }
+      try {
+        const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/expect", { steps });
+        if (r.ok) { state.expectJobs[nodeId] = { job_id: r.job_id, step: 0, total: steps.length, phase: "started", status: r.status || "running" }; if (nodeId === state.selId) renderExpectBar(); toast("Expect", "job started on " + nodeId); closeSheet("expect-sheet"); }
+        else toast("Failed", r.detail || r.error || "expect rejected");
+      } catch (e) { toast("Failed", "expect request error"); }
+    }
+    openSheet("expect-sheet", "Expect — " + nodeId, body,
+      [h("button", { class: "btn btn-secondary", onClick: () => closeSheet("expect-sheet") }, "Cancel"),
+       h("button", { class: "btn btn-primary", onClick: run }, "Run expect")]);
+    renderList();
+  }
+  function runExpectDemo(nodeId, steps) {
+    let i = 0; const total = steps.length;
+    state.expectJobs[nodeId] = { job_id: "demo", step: 0, total, phase: "started", status: "running" };
+    if (nodeId === state.selId) renderExpectBar();
+    const tick = () => {
+      const job = state.expectJobs[nodeId]; if (!job || job.status === "cancelled") return;
+      if (i >= total) { job.phase = "done"; job.status = "done"; if (nodeId === state.selId) renderExpectBar(); return; }
+      job.step = i + 1; job.phase = steps[i].wait_for ? "wait" : "action"; job.detail = ""; i++;
+      if (nodeId === state.selId) renderExpectBar();
+      setTimeout(tick, 700);
+    };
+    setTimeout(tick, 500);
+  }
+
+  // ---- Offline command queue (phase 6) -----------------------------------
+  function openQueueSheet(nodeId) {
+    const listHost = h("div", { class: "sc-scroll", style: "max-height:240px;overflow-y:auto;border:1px solid var(--color-divider)" });
+    async function refreshList() {
+      listHost.innerHTML = "";
+      let queued = [];
+      if (state.demo) queued = (state._demoQueue && state._demoQueue[nodeId]) || [];
+      else { try { const r = await getJSON("/nodes/" + encodeURIComponent(nodeId) + "/queue"); queued = r.queued || []; } catch (e) { queued = []; } }
+      if (!queued.length) { listHost.appendChild(h("div", { style: "padding:14px;font-size:12px;color:var(--color-neutral-600);text-align:center" }, "Nothing queued.")); return; }
+      for (const q of queued) {
+        const p = q.payload || {};
+        const label = p.type === "type" ? "type " + (p.text || "") : p.type === "send" ? "send " + (p.data || p.raw || "") : p.type === "keys" ? "keys " + (p.chord || []).join("+") : (q.type || p.type || "?");
+        listHost.appendChild(h("div", { style: "display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--color-divider)" },
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600);flex:none" }, "q" + q.id),
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:12px;min-width:0;flex:1;word-break:break-all" }, label),
+          h("span", { style: "font-size:11px;color:var(--color-neutral-600);flex:none" }, q.expires_at ? "ttl " + Math.max(0, Math.round((q.expires_at - now()) / 1000)) + "s" : "no expiry"),
+          h("button", { class: "btn btn-ghost", style: "flex:none;color:var(--color-accent);font-size:11px", onClick: () => cancelQueued(q.id) }, "Cancel")));
+      }
+    }
+    async function cancelQueued(qid) {
+      if (state.demo) { state._demoQueue[nodeId] = (state._demoQueue[nodeId] || []).filter((x) => x.id !== qid); return refreshList(); }
+      try { await delJSON("/nodes/" + encodeURIComponent(nodeId) + "/queue/" + qid); refreshList(); } catch (e) { toast("Failed", "could not cancel"); }
+    }
+    const cmdTxt = h("input", { class: "input", style: "flex:1;min-width:180px;font-family:ui-monospace,monospace", placeholder: "command to type on connect, e.g.  systemctl status" });
+    const ttlMin = h("input", { class: "input", type: "number", min: "0", step: "5", value: "60", style: "width:90px" });
+    async function add() {
+      const v = cmdTxt.value.trim(); if (!v) return;
+      const command = { type: "type", text: v + "\n" };
+      const ttl_ms = Math.max(0, Number(ttlMin.value) || 0) * 60000;
+      if (state.demo) { state._demoQueue = state._demoQueue || {}; (state._demoQueue[nodeId] = state._demoQueue[nodeId] || []).push({ id: ++seq, type: "type", payload: command, expires_at: ttl_ms ? now() + ttl_ms : null }); cmdTxt.value = ""; return refreshList(); }
+      try { const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/queue", { command, ttl_ms }); if (r.ok) { cmdTxt.value = ""; toast("Queued", "q" + r.id + " → " + nodeId); refreshList(); } else toast("Failed", r.detail || r.error); }
+      catch (e) { toast("Failed", "queue request error"); }
+    }
+    const online = (sel() || {}).status === "online";
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
+      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, online ? "Node is online — queued commands drain immediately on submit." : "Node is offline — commands are held and delivered when it reconnects."),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Pending"), listHost),
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
+        kicker("Add"), cmdTxt, h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:5px" }, "ttl", ttlMin, "min"),
+        h("button", { class: "btn btn-secondary", onClick: add }, "Queue")));
+    openSheet("queue-sheet", "Offline queue — " + nodeId, body,
+      [h("button", { class: "btn btn-primary", onClick: () => closeSheet("queue-sheet") }, "Done")], 600);
+    refreshList();
+  }
+
+  // ---- Session replay (phase 7) ------------------------------------------
+  function openReplay(nodeId) {
+    const url = "/api/nodes/" + encodeURIComponent(nodeId) + "/session.cast";
+    const hasPlayer = typeof window.AsciinemaPlayer === "object" && window.AsciinemaPlayer && typeof window.AsciinemaPlayer.create === "function";
+    let body;
+    if (state.demo) {
+      body = h("div", { style: "font-size:13px;color:var(--color-neutral-700)" }, "Replay is unavailable in demo mode (no hub recording). Live, this opens the node's console as an asciicast.");
+    } else if (hasPlayer) {
+      const host = h("div", { style: "min-height:300px;background:#1b1918" });
+      body = h("div", { style: "display:flex;flex-direction:column;gap:8px" },
+        h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Replaying the console recording for ", h("b", {}, nodeId), " at real speed."), host);
+      setTimeout(() => { try { window.AsciinemaPlayer.create(url, host, { fit: "width", terminalFontSize: "13px" }); } catch (e) { host.appendChild(h("div", { style: "padding:12px;color:#e0603c;font-size:12px" }, "player error — " + e.message)); } }, 0);
+    } else {
+      body = h("div", { style: "display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--color-neutral-700)" },
+        h("div", {}, "The asciinema player isn't vendored, so this can't play inline. Download the recording and play it locally with ", h("code", {}, "asciinema play " + nodeId + ".cast"), "."),
+        h("a", { class: "btn btn-primary", href: url, target: "_blank", style: "align-self:flex-start" }, "Download .cast"));
+    }
+    openSheet("replay-sheet", "Session replay — " + nodeId, body,
+      [h("a", { class: "btn btn-secondary", href: url, target: "_blank" }, "Download .cast"),
+       h("button", { class: "btn btn-primary", onClick: () => closeSheet("replay-sheet") }, "Close")], 760);
+  }
+
+  // ---- Serial bridge assign/unassign (phase 8) ---------------------------
+  async function refreshBridge() {
+    if (state.demo) return;
+    try { const r = await getJSON("/bridge"); state.bridge = { enabled: !!r.enabled, bind: r.bind || "", ports: r.ports || [] }; }
+    catch (e) { /* keep */ }
+  }
+  function openBridgeSheet(nodeId) {
+    const cur = bridgePortFor(nodeId);
+    const portInput = h("input", { class: "input", type: "number", min: "1024", max: "65535", value: cur || "7001", style: "width:120px" });
+    const info = h("div", { style: "font-size:12px;color:var(--color-neutral-700)" });
+    function renderInfo() {
+      info.innerHTML = "";
+      if (!state.bridge.enabled) info.appendChild(h("div", { style: "color:var(--color-accent-700)" }, "Serial bridge is disabled hub-wide — enable it in Settings for listeners to bind."));
+      if (cur != null) info.appendChild(h("div", {}, "Assigned to " + (state.bridge.bind || "0.0.0.0") + ":" + cur + " — connect with ",
+        h("code", {}, "minicom -D tcp:" + (state.hub.bind || location.hostname) + ":" + cur)));
+      else info.appendChild(h("div", {}, "No port assigned. Pick a TCP port to expose this node's raw serial."));
+    }
+    renderInfo();
+    async function assign() {
+      const port = Number(portInput.value) || 0;
+      if (port < 1024 || port > 65535) { toast("Failed", "port must be 1024-65535"); return; }
+      if (state.demo) { state.bridge.ports = (state.bridge.ports || []).filter((p) => p.node_id !== nodeId).concat([{ node_id: nodeId, port }]); closeSheet("bridge-sheet"); if (ui.header) renderHeaderInto(ui.header); toast("Bridge", nodeId + " → :" + port); return; }
+      try { const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/bridge?port=" + port); if (r.ok) { await refreshBridge(); closeSheet("bridge-sheet"); if (ui.header) renderHeaderInto(ui.header); toast("Bridge", nodeId + " → :" + port); } else toast("Failed", r.detail || r.error); }
+      catch (e) { toast("Failed", "bridge assign error"); }
+    }
+    async function unassign() {
+      if (state.demo) { state.bridge.ports = (state.bridge.ports || []).filter((p) => p.node_id !== nodeId); closeSheet("bridge-sheet"); if (ui.header) renderHeaderInto(ui.header); return; }
+      try { await delJSON("/nodes/" + encodeURIComponent(nodeId) + "/bridge"); await refreshBridge(); closeSheet("bridge-sheet"); if (ui.header) renderHeaderInto(ui.header); toast("Bridge", "port removed"); }
+      catch (e) { toast("Failed", "bridge remove error"); }
+    }
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
+      info,
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" }, kicker("Port"), portInput,
+        h("button", { class: "btn btn-secondary", onClick: assign }, cur != null ? "Reassign" : "Assign")));
+    openSheet("bridge-sheet", "Serial bridge — " + nodeId, body,
+      [cur != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: unassign }, "Unassign") : null,
+       h("button", { class: "btn btn-primary", onClick: () => closeSheet("bridge-sheet") }, "Done")], 560);
+  }
+
+  // ---- OTA firmware updates (phase 12) -----------------------------------
+  // status ∈ running|committing|committed|healthy|unconfirmed|failed. Terminal
+  // states: healthy (success), failed, unconfirmed (flashed but never confirmed
+  // back healthy). Progress is driven by the ota_progress WS event and mirrored
+  // into state.otaJobs; a per-node bar in the console view + the update sheet
+  // both read from there.
+  const OTA_TERMINAL = { healthy: 1, failed: 1, unconfirmed: 1 };
+  const otaTerminal = (s) => !!OTA_TERMINAL[s];
+  const shortSha = (s) => (s ? String(s).slice(0, 10) : "—");
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1048576).toFixed(2) + " MB";
+  }
+  // Hook so an open update sheet redraws its progress on each ota_progress event.
+  let otaSheetHooks = null;   // { nodeId, render } or null
+
+  function otaColors(job) {
+    const bad = job.status === "failed" || job.status === "unconfirmed" || job.phase === "failed";
+    const ok = job.status === "healthy";
+    return { bad, ok, running: !otaTerminal(job.status),
+      col: bad ? "var(--color-accent)" : ok ? "#3f9e63" : "var(--color-accent-600)" };
+  }
+  const otaStatusLabel = (job) => job.status === "healthy" ? "healthy — update confirmed"
+    : job.status === "failed" ? "failed" : job.status === "unconfirmed" ? "unconfirmed — did not report healthy"
+    : (job.phase || job.status || "running");
+
+  // Compact live bar in the console view (mirrors renderExpectBar).
+  function renderOtaBar() {
+    if (!ui.otaBar) return;
+    ui.otaBar.innerHTML = "";
+    const job = state.otaJobs[state.selId];
+    if (!job) return;
+    const c = otaColors(job);
+    const pct = job.total_bytes ? Math.round((job.sent_bytes / job.total_bytes) * 100) : (c.ok ? 100 : 0);
+    ui.otaBar.appendChild(h("div", { style: "border-top:1px solid var(--color-divider);padding:6px var(--space-4);display:flex;align-items:center;gap:var(--space-3);background:var(--color-surface)" },
+      h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600);flex:none" }, "OTA"),
+      h("span", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px;flex:none" }, job.bundle || "firmware"),
+      h("div", { style: "flex:1;height:6px;background:var(--color-neutral-300);min-width:60px" }, h("div", { style: "height:100%;width:" + pct + "%;background:" + c.col })),
+      h("span", { style: "font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--color-neutral-700);flex:none" }, fmtBytes(job.sent_bytes) + " / " + fmtBytes(job.total_bytes)),
+      h("span", { style: "font-size:11px;color:var(--color-neutral-700);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, otaStatusLabel(job) + (job.detail ? " · " + job.detail : "")),
+      !c.running
+        ? h("button", { class: "btn btn-ghost", style: "flex:none;font-size:11px", onClick: () => { delete state.otaJobs[state.selId]; renderOtaBar(); } }, "Dismiss")
+        : null));
+  }
+
+  // Larger progress block used inside the update sheet.
+  function otaProgressBlock(job) {
+    if (!job) return h("div", { style: "font-size:12px;color:var(--color-neutral-600)" }, "No update in progress.");
+    const c = otaColors(job);
+    const pct = job.total_bytes ? Math.round((job.sent_bytes / job.total_bytes) * 100) : (c.ok ? 100 : 0);
+    return h("div", { style: "display:flex;flex-direction:column;gap:8px;border:1px solid var(--color-divider);padding:12px" },
+      h("div", { style: "display:flex;align-items:baseline;gap:10px" },
+        h("span", { style: "font-family:ui-monospace,Menlo,monospace;font-size:13px;font-weight:600" }, job.bundle || "firmware"),
+        h("span", { class: "tag " + (c.bad ? "tag-accent" : c.ok ? "tag-neutral" : "tag-outline"), style: "padding:1px 7px" }, job.status),
+        h("span", { style: "margin-left:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--color-neutral-600)" }, fmtBytes(job.sent_bytes) + " / " + fmtBytes(job.total_bytes) + " · " + pct + "%")),
+      h("div", { style: "height:8px;background:var(--color-neutral-300)" }, h("div", { style: "height:100%;width:" + pct + "%;background:" + c.col })),
+      h("div", { style: "font-size:12px;color:" + (c.bad ? "var(--color-accent)" : "var(--color-neutral-700)") }, otaStatusLabel(job) + (job.detail ? " · " + job.detail : "")));
+  }
+
+  async function refreshBundles() {
+    if (state.demo) return;
+    try { const r = await getJSON("/ota/bundles"); state.bundles = r.bundles || []; }
+    catch (e) { /* keep */ }
+  }
+
+  // FileReader → base64 (strip the "data:...;base64," prefix the API doesn't want).
+  function readFileB64(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => { const s = String(fr.result || ""); const i = s.indexOf(","); resolve(i >= 0 ? s.slice(i + 1) : s); };
+      fr.onerror = () => reject(fr.error || new Error("read error"));
+      fr.readAsDataURL(file);
+    });
+  }
+
+  // Per-node "Update firmware" sheet: pick a bundle, push, watch live progress.
+  function openOtaSheet(nodeId) {
+    const node = findNode(nodeId) || {};
+    let picked = null;
+    const listHost = h("div", { class: "sc-scroll", style: "max-height:200px;overflow-y:auto;border:1px solid var(--color-divider)" });
+    const progressHost = h("div", {});
+    const updateBtn = h("button", { class: "btn btn-primary", onClick: () => run() }, "Update firmware");
+
+    function renderProgress() {
+      progressHost.innerHTML = "";
+      const job = state.otaJobs[nodeId];
+      progressHost.appendChild(otaProgressBlock(job));
+      const running = job && !otaTerminal(job.status);
+      const online = (findNode(nodeId) || {}).status === "online";
+      updateBtn.disabled = !!running || !online || !picked;
+      updateBtn.textContent = running ? "Updating…" : "Update firmware";
+    }
+    function renderBundles() {
+      listHost.innerHTML = "";
+      if (!state.bundles.length) { listHost.appendChild(h("div", { style: "padding:14px;font-size:12px;color:var(--color-neutral-600);text-align:center" }, "No bundles yet — open “Manage bundles” to create one.")); return; }
+      for (const b of state.bundles) {
+        const on = b.name === picked;
+        listHost.appendChild(h("label", { style: "display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--color-divider);cursor:pointer;background:" + (on ? "var(--color-surface)" : "transparent") },
+          h("input", { type: "radio", name: "otabundle", checked: on, style: "accent-color:var(--color-accent);flex:none", onChange: () => { picked = b.name; renderBundles(); renderProgress(); } }),
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:13px;font-weight:600;flex:none" }, b.name),
+          h("span", { style: "font-size:11px;color:var(--color-neutral-600);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, (b.files || []).join(", ")),
+          h("span", { style: "margin-left:auto;font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600);flex:none" }, shortSha(b.total_sha256))));
+      }
+    }
+    async function run() {
+      if (!picked) { toast("Failed", "pick a bundle"); return; }
+      if ((findNode(nodeId) || {}).status !== "online") { toast("Failed", nodeId + " is offline"); return; }
+      if (state.demo) { runOtaDemo(nodeId, picked); return; }
+      try {
+        const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/ota", { bundle: picked });
+        if (r.ok) {
+          state.otaJobs[nodeId] = { job_id: r.job_id, bundle: picked, status: "running", phase: "begin", sent_bytes: 0, total_bytes: r.total_bytes || 0, detail: "" };
+          renderProgress(); if (nodeId === state.selId) renderOtaBar();
+          toast("OTA", "update started on " + nodeId);
+          pollOta(nodeId, r.job_id);
+        } else toast("Failed", r.detail || r.error || "ota rejected");
+      } catch (e) { toast("Failed", "ota request error"); }
+    }
+
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
+      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Push a firmware bundle to ", h("b", {}, nodeId),
+        ". The Pico flashes, reboots and must report ", h("b", {}, "healthy"), " to confirm; a canary rollout can update a whole group."),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Bundle"), listHost),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Progress"), progressHost));
+
+    openSheet("ota-sheet", "Update firmware — " + nodeId, body,
+      [h("button", { class: "btn btn-ghost", style: "margin-right:auto", onClick: () => openBundleManager() }, "Manage bundles…"),
+       h("button", { class: "btn btn-secondary", onClick: () => closeOtaSheet() }, "Close"),
+       updateBtn]);
+    // Wire the backdrop close (openSheet's own onClick) to also drop the hook.
+    const bd = $("ota-sheet");
+    if (bd) bd.addEventListener("click", (e) => { if (e.target === bd) otaSheetHooks = null; });
+    otaSheetHooks = { nodeId, render: renderProgress };
+    renderBundles();
+    renderProgress();
+  }
+  function closeOtaSheet() { otaSheetHooks = null; closeSheet("ota-sheet"); }
+
+  // Poll the job as a belt-and-suspenders backup to the ota_progress WS events
+  // (which are the primary channel) until it reaches a terminal state.
+  async function pollOta(nodeId, jobId) {
+    if (state.demo) return;
+    let job;
+    try { const r = await getJSON("/nodes/" + encodeURIComponent(nodeId) + "/ota/" + encodeURIComponent(jobId)); job = r && r.job; }
+    catch (e) { job = null; }
+    if (job) {
+      state.otaJobs[nodeId] = { job_id: job.job_id, bundle: job.bundle, status: job.status, phase: job.phase,
+        sent_bytes: job.sent_bytes || 0, total_bytes: job.total_bytes || 0, detail: job.detail || "" };
+      if (nodeId === state.selId && state.view === "nodes") renderOtaBar();
+      if (otaSheetHooks && otaSheetHooks.nodeId === nodeId) otaSheetHooks.render();
+      if (otaTerminal(job.status)) return;
+    }
+    setTimeout(() => pollOta(nodeId, jobId), 1500);
+  }
+
+  // Bundle manager + rollout sheet.
+  function openBundleManager() {
+    otaSheetHooks = null;
+    closeSheet("ota-sheet");
+    const nameInput = h("input", { class: "input", style: "flex:1;min-width:180px;font-family:ui-monospace,monospace", placeholder: "bundle name, e.g.  fw-1.1.0" });
+    const fileInput = h("input", { class: "input", type: "file", multiple: "multiple", style: "flex:1;min-width:200px" });
+    const listHost = h("div", { class: "sc-scroll", style: "max-height:200px;overflow-y:auto;border:1px solid var(--color-divider)" });
+
+    function renderList() {
+      listHost.innerHTML = "";
+      if (!state.bundles.length) { listHost.appendChild(h("div", { style: "padding:14px;font-size:12px;color:var(--color-neutral-600);text-align:center" }, "No bundles yet.")); return; }
+      for (const b of state.bundles) {
+        listHost.appendChild(h("div", { style: "padding:8px 10px;border-bottom:1px solid var(--color-divider)" },
+          h("div", { style: "display:flex;gap:8px;align-items:baseline" },
+            h("span", { style: "font-family:ui-monospace,monospace;font-size:13px;font-weight:600" }, b.name),
+            h("span", { style: "font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)" }, "sha " + shortSha(b.total_sha256)),
+            h("span", { style: "margin-left:auto;font-size:11px;color:var(--color-neutral-600)" }, b.created_at ? rel(b.created_at) : "")),
+          h("div", { style: "font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-700);margin-top:3px;word-break:break-all" }, (b.files || []).join(" · "))));
+      }
+    }
+    async function create() {
+      const name = nameInput.value.trim();
+      if (!name) { toast("Failed", "name the bundle"); nameInput.focus(); return; }
+      const fl = fileInput.files;
+      if (!fl || !fl.length) { toast("Failed", "pick at least one file"); return; }
+      if (state.demo) {
+        state.bundles.unshift({ name, files: Array.from(fl).map((f) => f.name), total_sha256: (Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)), created_at: now() });
+        nameInput.value = ""; fileInput.value = ""; renderList(); renderRolloutBundles(); toast("Bundle", "created " + name + " (demo)"); return;
+      }
+      try {
+        const files = [];
+        for (const f of Array.from(fl)) files.push({ path: f.name, content_b64: await readFileB64(f) });
+        const r = await postJSON("/ota/bundles", { name, files });
+        if (r.ok) { nameInput.value = ""; fileInput.value = ""; await refreshBundles(); renderList(); renderRolloutBundles(); toast("Bundle", "created " + name); }
+        else toast("Failed", r.detail || r.error || "bundle rejected");
+      } catch (e) { toast("Failed", "bundle upload error"); }
+    }
+
+    // Rollout controls: pick ota-capable nodes (or a group) + stagger.
+    const rollMode = { by: "nodes" };
+    let rollBundle = state.bundles.length ? state.bundles[0].name : null;
+    const rollBundleHost = h("div", { style: "display:flex;gap:6px;flex-wrap:wrap" });
+    function renderRolloutBundles() {
+      rollBundleHost.innerHTML = "";
+      if (!state.bundles.length) { rollBundleHost.appendChild(h("span", { style: "font-size:12px;color:var(--color-neutral-600)" }, "create a bundle first")); rollBundle = null; return; }
+      if (!state.bundles.find((b) => b.name === rollBundle)) rollBundle = state.bundles[0].name;
+      for (const b of state.bundles) rollBundleHost.appendChild(h("label", { class: "seg-opt", style: "border:1px solid var(--color-divider);padding:3px 8px" },
+        h("input", { type: "radio", name: "rollbundle", checked: b.name === rollBundle, onChange: () => { rollBundle = b.name; } }), b.name));
+    }
+    const otaNodes = state.nodes.filter((n) => nodeHasOta(n));
+    const nodeChecks = otaNodes.map((n) => ({ n, cb: h("input", { type: "checkbox", style: "accent-color:var(--color-accent)" }) }));
+    const groups = Array.from(new Set(otaNodes.map((n) => n.group).filter(Boolean)));
+    const groupSel = h("select", { class: "input", style: "width:200px" }, h("option", { value: "" }, "— pick a group —"), ...groups.map((g) => h("option", { value: g }, g)));
+    const stagger = h("input", { class: "input", type: "number", min: "0", step: "500", value: "3000", style: "width:100px" });
+    const nodesBox = otaNodes.length
+      ? h("div", { style: "display:flex;flex-direction:column;gap:4px;max-height:150px;overflow-y:auto;border:1px solid var(--color-divider);padding:8px" },
+          ...nodeChecks.map(({ n, cb }) => h("label", { style: "display:flex;gap:8px;align-items:center;font-size:13px;font-family:ui-monospace,monospace" }, cb,
+            h("span", { style: "width:8px;height:8px;border-radius:50%;background:" + (n.status === "online" ? "#3f9e63" : "#8c8683") }), n.id,
+            h("span", { style: "color:var(--color-neutral-600)" }, n.group || ""))))
+      : h("div", { style: "font-size:12px;color:var(--color-neutral-600);padding:8px" }, "No ota-capable nodes.");
+    const targetHost = h("div", {});
+    function renderTargets() { targetHost.innerHTML = ""; targetHost.appendChild(rollMode.by === "group" ? groupSel : nodesBox); }
+    const targetSeg = h("div", { class: "seg", style: "align-self:flex-start" },
+      ...[["nodes", "Pick nodes"], ["group", "Whole group"]].map(([k, label]) => h("label", { class: "seg-opt" },
+        h("input", { type: "radio", name: "rolltarget", checked: rollMode.by === k, onChange: () => { rollMode.by = k; renderTargets(); } }), label)));
+
+    async function rollout() {
+      if (!rollBundle) { toast("Failed", "create/pick a bundle"); return; }
+      const stagger_ms = Math.max(0, Number(stagger.value) || 0);
+      let ids;
+      if (rollMode.by === "group") {
+        if (!groupSel.value) { toast("Failed", "pick a group"); return; }
+        ids = otaNodes.filter((n) => n.group === groupSel.value).map((n) => n.id);
+      } else {
+        ids = nodeChecks.filter((x) => x.cb.checked).map((x) => x.n.id);
+      }
+      if (!ids.length) { toast("Failed", "select at least one node"); return; }
+      if (state.demo) { closeSheet("bundle-manager"); ids.forEach((id, i) => setTimeout(() => runOtaDemo(id, rollBundle), i * 700)); toast("Rollout", "canary rollout of " + rollBundle + " → " + ids.length + " node(s)"); return; }
+      try {
+        const r = await postJSON("/bulk/ota", { node_ids: ids, bundle: rollBundle, stagger_ms });
+        if (r.ok) { closeSheet("bundle-manager"); toast("Rollout", "staged canary rollout started — watch per-node progress"); ids.forEach((id) => { if (findNode(id)) state.otaJobs[id] = { job_id: null, bundle: rollBundle, status: "running", phase: "queued", sent_bytes: 0, total_bytes: 0, detail: "canary rollout" }; }); if (state.selId && ids.indexOf(state.selId) >= 0) renderOtaBar(); }
+        else toast("Failed", r.detail || r.error || "rollout rejected");
+      } catch (e) { toast("Failed", "rollout request error"); }
+    }
+
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:14px" },
+      h("div", { style: "display:flex;flex-direction:column;gap:8px" }, kicker("Bundles"), listHost),
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:10px" },
+        kicker("New"), nameInput),
+      h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" },
+        kicker("Files"), fileInput, h("button", { class: "btn btn-secondary", onClick: create }, "Create bundle")),
+      h("div", { style: "font-size:11px;color:var(--color-neutral-600);line-height:1.5" }, "Files are read in the browser and base64-encoded into the bundle manifest on the hub."),
+      h("div", { style: "border-top:1px solid var(--color-divider)" }),
+      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, h("b", {}, "Canary rollout"), " — updates one node, waits for it to come back ", h("b", {}, "healthy"), ", then staggers the rest. Follow each node's progress bar in its console."),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Bundle"), rollBundleHost),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Target"), targetSeg, targetHost),
+      h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:6px" }, "stagger", stagger, "ms between nodes"),
+      h("div", { style: "display:flex" }, h("button", { class: "btn btn-primary", style: "margin-left:auto", onClick: rollout }, "Start rollout")));
+
+    openSheet("bundle-manager", "Firmware bundles", body,
+      [h("button", { class: "btn btn-primary", onClick: () => closeSheet("bundle-manager") }, "Done")], 720);
+    renderList();
+    renderRolloutBundles();
+    renderTargets();
+  }
+
+  // Demo: simulate a byte-streamed flash that reboots and comes back healthy.
+  function runOtaDemo(nodeId, bundle) {
+    const total = 262144;   // ~256 KB fake firmware
+    const job = { job_id: "ota_demo" + (++seq), bundle, status: "running", phase: "begin", sent_bytes: 0, total_bytes: total, detail: "" };
+    state.otaJobs[nodeId] = job;
+    const refresh = () => { if (nodeId === state.selId && state.view === "nodes") renderOtaBar(); if (otaSheetHooks && otaSheetHooks.nodeId === nodeId) otaSheetHooks.render(); };
+    refresh();
+    const step = Math.round(total / 12);
+    const tick = () => {
+      const j = state.otaJobs[nodeId]; if (!j || j.job_id !== job.job_id) return;
+      if (j.sent_bytes < total) {
+        j.sent_bytes = Math.min(total, j.sent_bytes + step); j.phase = "transfer"; j.detail = "flashing"; refresh();
+        setTimeout(tick, 260);
+      } else if (j.status === "running") {
+        j.status = "committing"; j.phase = "commit"; j.detail = "writing image"; refresh();
+        setTimeout(() => { j.status = "committed"; j.phase = "reboot"; j.detail = "rebooting into new image"; refresh();
+          setTimeout(() => { j.status = "healthy"; j.phase = "confirmed"; j.detail = "node reported healthy"; refresh();
+            pushLine(nodeId, "sys", "OTA " + bundle + " → healthy"); }, 1400); }, 900);
+      }
+    };
+    setTimeout(tick, 300);
+  }
+
+  // ---- Runbooks view (phase 9) -------------------------------------------
+  const RUNBOOK_PLACEHOLDER = "name: log-in\nsteps:\n  - wait_for: \"login:\"\n    timeout_ms: 30000\n  - send: \"root\\n\"\n  - wait_for: \"[Pp]assword:\"\n  - send: \"toor\\n\"\n  - wait_for: \"[#$] $\"\n";
+  const selRunbook = () => state.runbooks.find((r) => r.id === state.selRunbook) || null;
+  async function refreshRunbooks(selectId) {
+    if (state.demo) { if (state.view === "runbooks") renderView(); return; }
+    try {
+      const d = await getJSON("/runbooks");
+      state.runbooks = (d.runbooks || []).map((r) => ({ id: r.id, name: r.name, yaml: r.yaml }));
+      if (selectId != null && state.runbooks.find((r) => r.id === selectId)) state.selRunbook = selectId;
+      else if (!state.runbooks.find((r) => r.id === state.selRunbook)) state.selRunbook = state.runbooks.length ? state.runbooks[0].id : null;
+    } catch (e) { /* keep */ }
+    if (state.view === "runbooks") renderView();
+  }
+  function buildRunbooksView() {
+    const rows = h("tbody");
+    for (const rb of state.runbooks) {
+      const isSel = rb.id === state.selRunbook;
+      rows.appendChild(h("tr", { style: "cursor:pointer;background:" + (isSel ? "var(--color-surface)" : "transparent") + ";border-left:" + (isSel ? "3px solid var(--color-accent)" : "3px solid transparent"),
+        onClick: () => { state.selRunbook = rb.id; renderView(); } },
+        h("td", { style: "font-weight:600" }, rb.name),
+        h("td", { style: "font-family:ui-monospace,Menlo,monospace;font-size:12px" }, (rb.yaml || "").split("\n").filter((l) => /^\s*-/.test(l)).length + " steps"),
+        h("td", {}, h("button", { class: "btn btn-secondary", style: "padding:2px 9px;font-size:12px", onClick: (e) => { e.stopPropagation(); openRunbookRun(rb); } }, "Run"))));
+    }
+    const left = h("div", { style: "flex:1 1 auto;min-width:0;display:flex;flex-direction:column;min-height:0;border-right:2px solid var(--color-divider)" },
+      h("div", { style: "flex:none;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider)" },
+        h("h4", { style: "margin:0" }, "Runbooks"),
+        h("span", { style: "font-size:12px;color:var(--color-neutral-600)" }, "YAML expect flows, run across nodes or a group"),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", onClick: () => openRunbookEditor(null) }, "New runbook")),
+      state.runbooks.length
+        ? h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" },
+            h("table", { class: "table", style: "width:100%" },
+              h("thead", {}, h("tr", {}, ...["Name", "Steps", ""].map((t) => h("th", {}, t)))), rows))
+        : h("div", { style: "flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--color-neutral-600);padding:var(--space-4)" },
+            h("div", { style: "font-size:13px;font-weight:600" }, "No runbooks yet"),
+            h("div", { style: "font-size:12px;max-width:360px;text-align:center;line-height:1.5" }, "A runbook is a YAML expect flow — wait for prompts, send responses — that you can run across a whole group at once."),
+            h("button", { class: "btn btn-primary", onClick: () => openRunbookEditor(null) }, "Create your first runbook")));
+
+    // active runs pane
+    const runsHost = h("div", { class: "sc-scroll", style: "flex:1;overflow-y:auto;min-height:0" });
+    const runIds = Object.keys(state.runbookRuns);
+    if (!runIds.length) runsHost.appendChild(empty("No active or recent runs."));
+    for (const rid of runIds.reverse()) {
+      const run = state.runbookRuns[rid];
+      const nodes = run.nodes || {};
+      const chips = Object.keys(nodes).map((nid) => {
+        const st = nodes[nid];
+        const col = st === "failed" || st === "rejected" ? "var(--color-accent)" : st === "done" ? "#3f9e63" : st === "running" || st === "queued" ? "var(--color-accent-600)" : "var(--color-neutral-500)";
+        return h("span", { style: "display:inline-flex;gap:5px;align-items:center;font-size:11px;font-family:ui-monospace,monospace;padding:2px 7px;border:1px solid var(--color-divider)" },
+          h("span", { style: "width:7px;height:7px;border-radius:50%;background:" + col }), nid, h("span", { style: "color:var(--color-neutral-600)" }, st));
+      });
+      runsHost.appendChild(h("div", { style: "padding:var(--space-2) var(--space-4);border-bottom:1px solid var(--color-divider)" },
+        h("div", { style: "display:flex;gap:8px;align-items:baseline" },
+          h("span", { style: "font-weight:600;font-size:13px" }, run.name || "runbook"),
+          h("span", { style: "font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)" }, rid)),
+        h("div", { style: "display:flex;gap:6px;flex-wrap:wrap;margin-top:6px" }, ...chips)));
+    }
+
+    const rb = selRunbook();
+    const right = h("div", { style: "flex:none;width:400px;display:flex;flex-direction:column;min-height:0" },
+      h("div", { style: "flex:none;padding:var(--space-3) var(--space-4);border-bottom:2px solid var(--color-divider)" },
+        h("div", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600)" }, "Runs"),
+        h("h5", { style: "margin:2px 0 0" }, "Live progress")),
+      runsHost,
+      h("div", { style: "flex:none;padding:var(--space-3) var(--space-4);border-top:2px solid var(--color-divider);display:flex;gap:var(--space-2)" },
+        h("button", { class: "btn btn-secondary", disabled: !rb, onClick: () => rb && openRunbookEditor(rb) }, "Edit"),
+        h("button", { class: "btn btn-ghost", disabled: !rb, style: "color:var(--color-accent)", onClick: () => rb && deleteRunbook(rb) }, "Delete"),
+        h("button", { class: "btn btn-primary", style: "margin-left:auto", disabled: !rb, onClick: () => rb && openRunbookRun(rb) }, "Run")));
+    return h("div", { style: "flex:1;display:flex;min-height:0" }, left, right);
+  }
+  function openRunbookEditor(existing) {
+    const draft = { id: existing ? existing.id : null, name: existing ? existing.name : "", yaml: existing ? existing.yaml : RUNBOOK_PLACEHOLDER };
+    const nameInput = h("input", { class: "input", style: "flex:1;min-width:180px", value: draft.name, placeholder: "runbook name", onInput: (e) => { draft.name = e.target.value; } });
+    const yamlArea = h("textarea", { class: "input", style: "min-height:280px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;overflow:auto", value: draft.yaml, onInput: (e) => { draft.yaml = e.target.value; } });
+    async function save() {
+      const name = draft.name.trim(); if (!name) { toast("Failed", "Give the runbook a name"); nameInput.focus(); return; }
+      if (state.demo) { if (draft.id == null) { draft.id = ++seq; state.runbooks.push({ id: draft.id, name, yaml: draft.yaml }); } else { const r = selRunbookById(draft.id); if (r) { r.name = name; r.yaml = draft.yaml; } } state.selRunbook = draft.id; closeSheet("runbook-editor"); renderView(); return; }
+      try {
+        let id = draft.id;
+        if (id == null) { const r = await postJSON("/runbooks", { name, yaml: draft.yaml }); if (!r.ok) { toast("Failed", r.detail || r.error); return; } id = r.id; }
+        else { const r = await patchJSON("/runbooks/" + id, { name, yaml: draft.yaml }); if (r && r.ok === false) { toast("Failed", r.detail || r.error); return; } }
+        closeSheet("runbook-editor"); toast("Runbook", (draft.id == null ? "Created " : "Saved ") + name); await refreshRunbooks(id);
+      } catch (e) { toast("Failed", "could not save runbook (check YAML)"); }
+    }
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
+      h("div", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }, kicker("Name"), nameInput),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("YAML"), yamlArea),
+      h("div", { style: "font-size:11px;color:var(--color-neutral-600);line-height:1.5" }, "Steps: ", h("code", {}, "wait_for"), " (with optional ", h("code", {}, "timeout_ms"), "), ", h("code", {}, "send"), ", ", h("code", {}, "delay_ms"), ". Validated by the hub on save."));
+    openSheet("runbook-editor", draft.id == null ? "New runbook" : "Edit runbook", body,
+      [draft.id != null ? h("button", { class: "btn btn-ghost", style: "margin-right:auto;color:var(--color-accent)", onClick: () => { const r = selRunbookById(draft.id); closeSheet("runbook-editor"); if (r) deleteRunbook(r); } }, "Delete") : null,
+       h("button", { class: "btn btn-secondary", onClick: () => closeSheet("runbook-editor") }, "Cancel"),
+       h("button", { class: "btn btn-primary", onClick: save }, draft.id == null ? "Create" : "Save")], 720);
+  }
+  const selRunbookById = (id) => state.runbooks.find((r) => r.id === id) || null;
+  function deleteRunbook(rb) {
+    confirmDialog("Delete runbook?", "Delete “" + rb.name + "”? This cannot be undone.", "Delete", async () => {
+      if (state.demo) { state.runbooks = state.runbooks.filter((x) => x.id !== rb.id); if (state.selRunbook === rb.id) state.selRunbook = state.runbooks.length ? state.runbooks[0].id : null; renderView(); return; }
+      try { await delJSON("/runbooks/" + rb.id); toast("Runbook", "Deleted " + rb.name); await refreshRunbooks(); } catch (e) { toast("Failed", "could not delete"); }
+    });
+  }
+  function openRunbookRun(rb) {
+    const mode = { by: "nodes" };
+    const nodeChecks = state.nodes.map((n) => ({ n, cb: h("input", { type: "checkbox", style: "accent-color:var(--color-accent)" }) }));
+    const groups = Array.from(new Set(state.nodes.map((n) => n.group).filter(Boolean)));
+    const groupSel = h("select", { class: "input", style: "width:200px" }, h("option", { value: "" }, "— pick a group —"), ...groups.map((g) => h("option", { value: g }, g)));
+    const stagger = h("input", { class: "input", type: "number", min: "0", step: "100", value: "0", style: "width:100px" });
+    const nodesBox = h("div", { style: "display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto;border:1px solid var(--color-divider);padding:8px" },
+      ...nodeChecks.map(({ n, cb }) => h("label", { style: "display:flex;gap:8px;align-items:center;font-size:13px;font-family:ui-monospace,monospace" }, cb,
+        h("span", { style: "width:8px;height:8px;border-radius:50%;background:" + (n.status === "online" ? "#3f9e63" : "#8c8683") }), n.id,
+        h("span", { style: "color:var(--color-neutral-600)" }, n.group || ""))));
+    const targetHost = h("div", {});
+    function renderTargets() { targetHost.innerHTML = ""; targetHost.appendChild(mode.by === "group" ? groupSel : nodesBox); }
+    const seg = h("div", { class: "seg", style: "align-self:flex-start" },
+      ...[["nodes", "Pick nodes"], ["group", "Whole group"]].map(([k, label]) => h("label", { class: "seg-opt" },
+        h("input", { type: "radio", name: "rbtarget", checked: mode.by === k, onChange: () => { mode.by = k; renderTargets(); } }), label)));
+    async function run() {
+      const body = { stagger_ms: Math.max(0, Number(stagger.value) || 0) };
+      if (mode.by === "group") { if (!groupSel.value) { toast("Failed", "pick a group"); return; } body.group = groupSel.value; }
+      else { const ids = nodeChecks.filter((x) => x.cb.checked).map((x) => x.n.id); if (!ids.length) { toast("Failed", "select at least one node"); return; } body.node_ids = ids; }
+      if (state.demo) { closeSheet("runbook-run"); runRunbookDemo(rb, body); return; }
+      try {
+        const r = await postJSON("/runbooks/" + rb.id + "/run", body);
+        if (r.ok) { state.runbookRuns[r.run_id] = { name: rb.name, nodes: {} }; (r.nodes || []).forEach((nid) => { state.runbookRuns[r.run_id].nodes[nid] = "queued"; }); toast("Runbook", rb.name + " → " + (r.nodes || []).length + " node(s)"); closeSheet("runbook-run"); if (state.view === "runbooks") renderView(); }
+        else toast("Failed", r.detail || r.error);
+      } catch (e) { toast("Failed", "runbook run error"); }
+    }
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" },
+      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Run ", h("b", {}, rb.name), " across:"),
+      seg, targetHost,
+      h("label", { style: "font-size:12px;color:var(--color-neutral-700);display:flex;align-items:center;gap:6px" }, "stagger", stagger, "ms between nodes"));
+    openSheet("runbook-run", "Run runbook — " + rb.name, body,
+      [h("button", { class: "btn btn-secondary", onClick: () => closeSheet("runbook-run") }, "Cancel"),
+       h("button", { class: "btn btn-primary", onClick: run }, "Run")], 620);
+    renderTargets();
+  }
+  function runRunbookDemo(rb, body) {
+    const rid = "rb_demo" + (++seq);
+    let ids = body.node_ids || [];
+    if (body.group) ids = state.nodes.filter((n) => n.group === body.group).map((n) => n.id);
+    const nodes = {}; ids.forEach((id) => { nodes[id] = "running"; });
+    state.runbookRuns[rid] = { name: rb.name, nodes };
+    if (state.view === "runbooks") renderView();
+    setTimeout(() => { ids.forEach((id) => { nodes[id] = "done"; }); if (state.view === "runbooks") renderView(); }, 1600);
   }
 
   // ---- WebSocket ---------------------------------------------------------
@@ -1046,6 +1840,34 @@
         break;
       }
       case "output": if (ev.id === state.selId) pushOutput(ev.id, ev.text); break;
+      case "node_state": {   // phase 4: live prompt-state badge
+        const n = findNode(ev.id); if (n) n.promptState = ev.prompt_state;
+        if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId && ui.header) renderHeaderInto(ui.header); }
+        break;
+      }
+      case "expect_progress": {   // phase 5
+        state.expectJobs[ev.id] = { job_id: ev.job_id, step: ev.step, total: ev.total, phase: ev.phase, detail: ev.detail,
+          status: (ev.phase === "done" || ev.phase === "failed" || ev.phase === "cancelled" || ev.phase === "timeout") ? ev.phase : "running" };
+        if (ev.id === state.selId && state.view === "nodes") renderExpectBar();
+        break;
+      }
+      case "ota_progress": {   // phase 12: live firmware update progress
+        const prev = state.otaJobs[ev.id] || {};
+        state.otaJobs[ev.id] = {
+          job_id: ev.job_id, bundle: ev.bundle != null ? ev.bundle : prev.bundle,
+          status: ev.status, phase: ev.phase, detail: ev.detail,
+          sent_bytes: ev.sent_bytes != null ? ev.sent_bytes : prev.sent_bytes || 0,
+          total_bytes: ev.total_bytes != null ? ev.total_bytes : prev.total_bytes || 0,
+        };
+        if (ev.id === state.selId && state.view === "nodes") renderOtaBar();
+        if (otaSheetHooks && otaSheetHooks.nodeId === ev.id) otaSheetHooks.render();
+        break;
+      }
+      case "runbook_progress": {   // phase 9
+        state.runbookRuns[ev.run_id] = { name: ev.name, nodes: ev.nodes || {} };
+        if (state.view === "runbooks") renderView();
+        break;
+      }
       case "event": {
         state.events.unshift({ ts: ev.ts, type: ev.type, nodeId: ev.node_id, detail: ev.detail });
         state.events = state.events.slice(0, 100);
@@ -1063,6 +1885,8 @@
     rec.status = meta.status || "online";
     rec.rttMs = meta.rtt_ms != null ? meta.rtt_ms : rec.rttMs;
     rec.caps = (meta.capabilities || []).join(",") || rec.caps || "";
+    rec.layout = meta.layout || rec.layout || "us";
+    rec.promptState = meta.prompt_state != null ? meta.prompt_state : rec.promptState;
     rec.lastSeen = meta.last_seen || now();
     rec.inflight = meta.inflight || 0;
     return rec;
@@ -1076,20 +1900,27 @@
   // ---- load --------------------------------------------------------------
   function apiNodeToRec(n) {
     return { id: n.id, label: n.label || "", group: n.group || "", ip: n.ip || "", fw: n.fw_version || "",
-      status: n.status, rttMs: n.rtt_ms, caps: (n.capabilities || []).join(","), lastSeen: n.last_seen || now(), inflight: n.inflight || 0 };
+      status: n.status, rttMs: n.rtt_ms, caps: (n.capabilities || []).join(","), lastSeen: n.last_seen || now(), inflight: n.inflight || 0,
+      layout: n.layout || "us", promptState: n.prompt_state || null };
   }
   async function loadLive() {
     const health = await getJSON("/health");
     state.hub.uptime_ms = health.uptime_ms; state.hub.version = health.version;
     state.hub.bind = health.bind; state.hub.swarm_port = health.swarm_port; state.hub.web_port = health.web_port;
     state.hub.nodes_online = health.nodes_online; state.hub.nodes_total = health.nodes_total;
-    const [nodes, macros, settings, events] = await Promise.all([
+    const [nodes, macros, settings, events, bridge, runbooks, bundles] = await Promise.all([
       getJSON("/nodes"), getJSON("/macros"), getJSON("/settings"), getJSON("/events?limit=60"),
+      getJSON("/bridge").catch(() => ({})), getJSON("/runbooks").catch(() => ({})),
+      getJSON("/ota/bundles").catch(() => ({})),
     ]);
     state.nodes = (nodes.nodes || []).map(apiNodeToRec);
     state.macros = (macros.macros || []).map((m) => ({ id: m.id, name: m.name, group: m.group, steps: m.steps, runs: 0, lastRun: null }));
     state.settings = settings.settings || {};
     state.events = (events.events || []).map((e) => ({ ts: e.ts, type: e.type, nodeId: e.node_id, detail: e.detail }));
+    state.bridge = { enabled: !!bridge.enabled, bind: bridge.bind || "", ports: bridge.ports || [] };
+    state.runbooks = (runbooks.runbooks || []).map((r) => ({ id: r.id, name: r.name, yaml: r.yaml }));
+    state.selRunbook = state.runbooks.length ? state.runbooks[0].id : null;
+    state.bundles = bundles.bundles || [];
     if (!state.selId && state.nodes.length) state.selId = (state.nodes.find((n) => n.status === "online") || state.nodes[0]).id;
   }
 
@@ -1104,9 +1935,9 @@
     hub: { uptime_ms: 3 * 3600e3, bind: "hub.local", swarm_port: 9000, web_port: 8080, version: "demo" },
     settings: { heartbeat_interval_ms: 5000, stale_timeout_ms: 15000, output_retention_days: 30, event_retention_days: 90, require_confirm_dangerous: true },
     nodes: [
-      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.0.0", status: "online", rttMs: 3, ageMs: 2000, caps: "hid,cdc,serial_tx" },
-      { id: "node-02", label: "example target two", group: "group-a", ip: "10.0.0.12", fw: "1.0.0", status: "online", rttMs: 5, ageMs: 4000, caps: "hid,cdc,serial_tx" },
-      { id: "node-03", label: "example target three (old fw)", group: "group-b", ip: "10.0.0.13", fw: "0.9.4", status: "offline", rttMs: null, ageMs: 8600e3, caps: "hid,cdc" },
+      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.0.0", status: "online", rttMs: 3, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login" },
+      { id: "node-02", label: "example target two", group: "group-a", ip: "10.0.0.12", fw: "1.0.0", status: "online", rttMs: 5, ageMs: 4000, caps: "hid,cdc,serial_tx,ota", layout: "de", promptState: "shell" },
+      { id: "node-03", label: "example target three (old fw)", group: "group-b", ip: "10.0.0.13", fw: "0.9.4", status: "offline", rttMs: null, ageMs: 8600e3, caps: "hid,cdc", layout: "us", promptState: null },
     ],
     consoles: {
       "node-01": [["sys", "node node-01 registered · fw 1.0.0 · caps hid,cdc"], ["out", "login: "]],
@@ -1122,6 +1953,9 @@
       { ageMs: 64000, type: "node_up", nodeId: "node-02", detail: "registered · fw 1.0.0" },
     ],
     history: [{ id: "c-0001", nodeId: "node-01", text: "uptime", status: "done", ageMs: 42000 }],
+    runbooks: [{ id: 1, name: "log-in", yaml: "name: log-in\nsteps:\n  - wait_for: \"login:\"\n    timeout_ms: 30000\n  - send: \"root\\n\"\n  - wait_for: \"[Pp]assword:\"\n  - send: \"toor\\n\"\n  - wait_for: \"[#$] $\"\n" }],
+    bridge: { enabled: false, bind: "0.0.0.0", ports: [] },
+    bundles: [{ name: "fw-1.1.0", files: ["firmware.uf2", "manifest.json"], total_sha256: "9f2c4b7a1e6d3f80c5a2b9e4d7f1a0c3b8e6d5f4a2c1b0e9d8f7a6c5b4e3d2f1", created_at: null, ageMs: 6 * 3600e3 }],
   };
   const DEMO_CHATTER = ["[  OK  ] Reached target Multi-User System.", "kernel: eth0: link up 1000Mbps full duplex", "systemd[1]: Started Session of user root.", "login: "];
 
@@ -1143,7 +1977,15 @@
       id: n.id, label: n.label || "", group: n.group || "", ip: n.ip || "", fw: n.fw || "",
       status: n.status || "online", rttMs: n.rttMs != null ? n.rttMs : null, caps: n.caps || "hid,cdc",
       lastSeen: now() - (n.ageMs || 0), inflight: 0,
+      layout: n.layout || "us", promptState: n.promptState != null ? n.promptState : null,
     }));
+    state.bridge = Object.assign({ enabled: false, bind: "0.0.0.0", ports: [] }, d.bridge || {});
+    state.bundles = (d.bundles || []).map((b) => ({ name: b.name, files: b.files || [], total_sha256: b.total_sha256,
+      created_at: b.created_at != null ? b.created_at : (b.ageMs != null ? now() - b.ageMs : null) }));
+    state.otaJobs = {};
+    state.runbooks = (d.runbooks || []).map((r) => ({ id: r.id, name: r.name, yaml: r.yaml }));
+    state.selRunbook = state.runbooks.length ? state.runbooks[0].id : null;
+    state.runbookRuns = {};
     state.consoles = {};
     for (const k in (d.consoles || {})) {
       const arr = d.consoles[k];
@@ -1197,6 +2039,8 @@
     }
     renderShell();
     if (!state.demo && state.selId) backfillNode(state.selId);
+    // Keep the xterm terminal sized to its container (phase 3; no-op without xterm).
+    window.addEventListener("resize", () => { if (ui.xtermFit) { try { ui.xtermFit.fit(); } catch (e) {} } });
     setInterval(() => {
       // keep relative timestamps and fleet fresh
       if (state.view === "nodes") renderNodeList();

@@ -55,6 +55,14 @@ One page drives the whole swarm. **Click any screenshot to open it at full resol
 - **Headless-friendly** — LED status codes, opt-in `/error.txt`, and a REPL debug
   path make a node with no monitor diagnosable.
 
+**What's new:** interactive serial write with a real terminal renderer, per-node
+prompt-state badges, a wait-for-output **expect engine** and YAML **runbooks**, an
+offline command queue, **asciicast** session replay, a raw **serial bridge** for
+`minicom`/PuTTY, webhook/**ntfy** alerting, per-node keyboard layouts, and
+**OTA firmware updates** (chunked, checksummed, canary rollout with watchdog-revert). Depth in
+**[docs/automation.md](docs/automation.md)**, **[docs/operations.md](docs/operations.md)**,
+and **[docs/ota.md](docs/ota.md)**.
+
 ---
 
 ## Hardware
@@ -132,8 +140,10 @@ The full technical reference lives in **[docs/](docs/)**:
 | [architecture.md](docs/architecture.md) | Component roles, the single-loop hub, the one-cable USB design, the wire protocol, message journeys, data model, repo layout |
 | [hardware.md](docs/hardware.md) | Physical topology, bill of materials, component tree, sizing |
 | [deployment.md](docs/deployment.md) | The three build phases, the end-to-end workflow, the full script reference |
-| [firmware.md](docs/firmware.md) | Firmware lifecycle, LED codes, hardening, CircuitPython version rules |
-| [operations.md](docs/operations.md) | Observability & debugging, HID vs Serial input, console limits |
+| [firmware.md](docs/firmware.md) | Firmware lifecycle, LED codes, keyboard layout, OTA capability, hardening, CircuitPython version rules |
+| [operations.md](docs/operations.md) | Observability, prompt-state badges, HID vs Serial input, console renderer, session recording, serial bridge, alerting |
+| [automation.md](docs/automation.md) | Prompt-state detection, the expect (wait-for-output) engine, offline command queue, YAML runbooks |
+| [ota.md](docs/ota.md) | Over-the-wire firmware updates: the safety model and rollout posture |
 | [considerations.md](docs/considerations.md) | Security boundary, target requirements, power, roadmap |
 
 ---

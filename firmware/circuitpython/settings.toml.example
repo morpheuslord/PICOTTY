@@ -45,6 +45,13 @@ CHAR_DELAY_MS = 0
 # ready to accept input. BIOS targets may want this larger.
 KEYBOARD_SETTLE_MS = 1000
 
+# Keyboard layout the TARGET machine is set to. "us" (default) uses the built-in
+# layout; any other code loads a community layout library that build.sh stages
+# for you (de, uk, fr, it, es, br, ...). Get this wrong and symbols mistype (the
+# classic "the / in my password came out as -"). If the layout library is missing
+# on the board the node logs it and falls back to US rather than failing.
+KEYBOARD_LAYOUT = "us"
+
 # Reconnect backoff bounds (ms). Grows from start to max on repeated failures.
 RECONNECT_BACKOFF_START_MS = 1000
 RECONNECT_BACKOFF_MAX_MS = 30000
@@ -76,3 +83,12 @@ WATCHDOG_TIMEOUT_S = 8
 # so drag-drop firmware updates stop working until you re-flash CircuitPython.
 # Leave "false" for normal operation; turn on only to chase a fault.
 LOG_TO_FILE = "false"
+
+# Over-the-air firmware updates from the dashboard. Enabling this remounts the
+# filesystem writable to CircuitPython (so it can receive new files), which — like
+# LOG_TO_FILE — makes the CIRCUITPY drive READ-ONLY over USB. That is the intended
+# production posture for a node you update over the wire, not by drag-drop. The
+# node only advertises the `ota` capability when this is on AND adafruit_hashlib
+# is present (build.sh stages it). A bad update self-reverts on the next watchdog
+# reset. Leave "false" while bench-developing with drag-drop deploys.
+OTA_ENABLED = "false"

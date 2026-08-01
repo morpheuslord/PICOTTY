@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import random
 import struct
@@ -48,6 +49,7 @@ class SimNode:
         self.args = args
         self.writer = None
         self.lock = asyncio.Lock()
+        self._ota = {}   # rel_path -> {"size": int, "sha": hex, "buf": bytearray}
 
     async def send(self, obj):
         async with self.lock:
@@ -67,9 +69,12 @@ class SimNode:
         caps = ["hid", "cdc"]
         if not self.args.no_serial_tx:
             caps.append("serial_tx")
+        if self.args.ota:
+            caps.append("ota")
+        self._ota = {}
         await self.send({
             "type": "hello", "id": self.args.id, "token": self.args.token,
-            "fw": self.args.fw, "cap": caps,
+            "fw": self.args.fw, "cap": caps, "layout": self.args.layout,
         })
         print("[%s] connected to %s:%d" % (self.args.id, self.args.hub, self.args.port))
         hb = asyncio.create_task(self._heartbeat())
@@ -148,6 +153,70 @@ class SimNode:
             await self.send({"type": "bye"})
             print("[%s] reboot requested; dropping" % self.args.id)
             raise ConnectionError("reboot")
+        elif t == "ota_begin":
+            # Stage the manifest in memory. A real node writes staging files; a sim
+            # just remembers each path's expected size + sha and an empty buffer.
+            files = msg.get("files") or []
+            if not files:
+                await self.send({"type": "result", "cmd_id": cmd_id, "status": "failed",
+                                 "payload": "no files in manifest"})
+                return
+            self._ota = {}
+            for fdesc in files:
+                path = fdesc.get("path")
+                self._ota[path] = {
+                    "size": int(fdesc.get("size", 0)),
+                    "sha": fdesc.get("sha256", ""),
+                    "buf": bytearray(),
+                }
+            print("[%s] ota_begin: staging %d file(s)" % (self.args.id, len(files)))
+            await self.send({"type": "result", "cmd_id": cmd_id, "status": "ok",
+                             "payload": "staged %d file(s)" % len(files)})
+        elif t == "ota_chunk":
+            path = msg.get("path")
+            rec = self._ota.get(path)
+            if rec is None:
+                await self.send({"type": "result", "cmd_id": cmd_id, "status": "failed",
+                                 "payload": "chunk for unknown path %r" % path})
+                return
+            try:
+                data = bytes.fromhex(msg.get("data", ""))
+            except ValueError:
+                await self.send({"type": "result", "cmd_id": cmd_id, "status": "failed",
+                                 "payload": "bad chunk hex"})
+                return
+            rec["buf"].extend(data)
+            await self.send({"type": "result", "cmd_id": cmd_id, "status": "ok"})
+        elif t == "ota_commit":
+            if not self._ota:
+                await self.send({"type": "result", "cmd_id": cmd_id, "status": "failed",
+                                 "payload": "commit with no begun bundle"})
+                return
+            # Verify received bytes against the manifest (size + sha256) before
+            # accepting. A sim never touches the filesystem.
+            for path, rec in self._ota.items():
+                got = len(rec["buf"])
+                if rec["size"] and got != rec["size"]:
+                    await self.send({"type": "result", "cmd_id": cmd_id, "status": "failed",
+                                     "payload": "size mismatch %s: got %d want %d" % (
+                                         path, got, rec["size"])})
+                    return
+                if rec["sha"]:
+                    digest = hashlib.sha256(bytes(rec["buf"])).hexdigest()
+                    if digest != rec["sha"]:
+                        await self.send({"type": "result", "cmd_id": cmd_id, "status": "failed",
+                                         "payload": "sha256 mismatch for %s" % path})
+                        return
+            total = sum(len(rec["buf"]) for rec in self._ota.values())
+            n = len(self._ota)
+            self._ota = {}
+            print("[%s] ota_commit: verified %d file(s), %d bytes; simulating reload" % (
+                self.args.id, n, total))
+            await self.send({"type": "result", "cmd_id": cmd_id, "status": "ok",
+                             "payload": "committed %d file(s)" % n})
+            # Simulate the soft reload: drop the link so the hub sees us reconnect
+            # on the "new" firmware (mirrors the real node's supervisor.reload()).
+            raise ConnectionError("ota reload")
         elif t == "config":
             hb = msg.get("heartbeat_ms")
             if hb:
@@ -175,6 +244,9 @@ def main():
     ap.add_argument("--fw", default="1.0.0")
     ap.add_argument("--no-serial-tx", action="store_true",
                     help="drop the serial_tx capability (simulate old firmware that can't `send`)")
+    ap.add_argument("--ota", action="store_true",
+                    help="advertise the 'ota' capability and accept firmware pushes (in-memory, no fs writes)")
+    ap.add_argument("--layout", default="us", help="keyboard layout the node reports (us/de/uk/...)")
     ap.add_argument("--heartbeat", type=int, default=5000, help="ms")
     args = ap.parse_args()
     try:

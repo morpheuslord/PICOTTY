@@ -23,7 +23,7 @@ from injector import Injector, InjectError
 from wire import FrameReader, ProtocolError, encode
 import messages
 
-FW_VERSION = "1.0.0"
+FW_VERSION = "1.1.0"
 
 # Editing files on the CIRCUITPY drive must not yank a running node into a reload
 # mid-command. We reload deliberately (on a reboot command), never by surprise.
@@ -166,22 +166,44 @@ def idle_forever(wdt):
 
 # --- HID setup ---------------------------------------------------------------
 
+def resolve_layout(name, kbd):
+    """Return (layout, resolved_name) for the requested keyboard layout code.
+
+    "us" (or unset) uses the built-in Adafruit US layout. Any other code loads
+    the community library `keyboard_layout_win_<code>` (which pairs with its own
+    `keycode_win_<code>`); if that library isn't on the board we log it and fall
+    back to US, so a misconfigured layout degrades to a working keyboard rather
+    than a fatal HID error. The mapping character->keycode lives in these layout
+    objects, which is why layout selection is a firmware choice, not hub-side."""
+    code = (name or "us").strip().lower()
+    if code in ("", "us", "en", "en_us"):
+        from adafruit_hid.keyboard_layout_us import KeyboardLayoutUS
+        return KeyboardLayoutUS(kbd), "us"
+    try:
+        mod = __import__("keyboard_layout_win_" + code)
+        return mod.KeyboardLayout(kbd), code
+    except Exception as e:
+        log_error("keyboard layout %r unavailable (%s); using US" % (code, e))
+        print("keyboard layout %r unavailable (%s); using US" % (code, e))
+        from adafruit_hid.keyboard_layout_us import KeyboardLayoutUS
+        return KeyboardLayoutUS(kbd), "us"
+
+
 def setup_hid(cfg):
     import usb_hid
     from adafruit_hid.keyboard import Keyboard
-    from adafruit_hid.keyboard_layout_us import KeyboardLayoutUS
 
     if not usb_hid.devices:
         raise RuntimeError("no USB HID devices; did boot.py run usb_hid.enable()?")
     kbd = Keyboard(usb_hid.devices)      # blocks until the target enumerates us
     time.sleep(cfg.settle_ms / 1000)     # let the host get ready to accept input
-    layout = KeyboardLayoutUS(kbd)
-    return kbd, layout
+    layout, layout_name = resolve_layout(cfg.keyboard_layout, kbd)
+    return kbd, layout, layout_name
 
 
 # --- command dispatch (hub -> node) ------------------------------------------
 
-def dispatch(msg, net, injector, backchannel, state, cfg):
+def dispatch(msg, net, injector, backchannel, state, cfg, ota=None):
     """Handle one hub->node message. Command replies (result/pong/error) go back
     down the same socket. A link error while replying propagates up to trigger a
     reconnect; a command-level failure becomes a 'failed' result, not a crash."""
@@ -254,6 +276,46 @@ def dispatch(msg, net, injector, backchannel, state, cfg):
         # USB, so the target keeps seeing our keyboard and serial port.
         supervisor.reload()
 
+    elif t == "ota_begin":
+        if ota is None or not ota.available:
+            net.send(encode(messages.result(cmd_id, "failed", "ota not available")))
+        else:
+            try:
+                detail = ota.begin(msg)
+                net.send(encode(messages.result(cmd_id, "ok", detail)))
+            except Exception as e:
+                net.send(encode(messages.result(cmd_id, "failed", "ota_begin: %s" % e)))
+
+    elif t == "ota_chunk":
+        if ota is None:
+            net.send(encode(messages.result(cmd_id, "failed", "ota not available")))
+        else:
+            try:
+                ota.chunk(msg, decode_hex)
+                net.send(encode(messages.result(cmd_id, "ok")))
+            except Exception as e:
+                net.send(encode(messages.result(cmd_id, "failed", "ota_chunk: %s" % e)))
+
+    elif t == "ota_commit":
+        if ota is None:
+            net.send(encode(messages.result(cmd_id, "failed", "ota not available")))
+        else:
+            try:
+                detail = ota.commit(msg)
+            except Exception as e:
+                net.send(encode(messages.result(cmd_id, "failed", "ota_commit: %s" % e)))
+            else:
+                # Ack success BEFORE reloading, so the hub records the commit,
+                # then soft-reload onto the new firmware (which reconnects and,
+                # once healthy, finalizes to drop the .bak set).
+                net.send(encode(messages.result(cmd_id, "ok", detail)))
+                try:
+                    net.send(encode(messages.bye()))
+                except Exception:
+                    pass
+                net.close()
+                supervisor.reload()
+
     else:
         if cmd_id is not None:
             net.send(encode(messages.result(cmd_id, "failed", "unknown command type: %r" % t)))
@@ -263,7 +325,7 @@ def dispatch(msg, net, injector, backchannel, state, cfg):
 
 # --- session loop ------------------------------------------------------------
 
-def run_session(net, reader, injector, backchannel, state, cfg, wdt):
+def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
     """Run until the connection drops (which surfaces as a raised exception)."""
     scratch = bytearray(512)
     mv = memoryview(scratch)
@@ -292,7 +354,7 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt):
                     raise ConnectionError("protocol error")
                 if incoming is None:
                     break
-                dispatch(incoming, net, injector, backchannel, state, cfg)
+                dispatch(incoming, net, injector, backchannel, state, cfg, ota)
                 did_work = True
 
         # 2) Outbound target serial output, bounded per pass.
@@ -316,6 +378,14 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt):
         if now - last_hb >= state.heartbeat_ms * 1_000_000:
             net.send(encode(messages.heartbeat(cfg.node_id)))
             last_hb = now
+            # Reaching a heartbeat means we booted, networked, connected, and ran
+            # the loop — healthy enough to finalize a pending OTA update (drop the
+            # marker + .bak set). Idempotent and a cheap no-op when nothing pends.
+            if ota is not None:
+                try:
+                    ota.finalize()
+                except Exception:
+                    pass
 
         # 4) DHCP lease upkeep (no-op on a static node).
         if cfg.use_dhcp and now - last_lease >= cfg.dhcp_maintain_ms * 1_000_000:
@@ -359,7 +429,7 @@ def main():
     wdt = None
 
     try:
-        kbd, layout = setup_hid(cfg)
+        kbd, layout, layout_name = setup_hid(cfg)
     except Exception as e:
         print("HID ERROR:", e)
         log_error("HID ERROR: %s" % e)
@@ -377,6 +447,22 @@ def main():
         cap.append("cdc")
     if backchannel.can_write:
         cap.append("serial_tx")
+
+    # OTA: only offered when enabled AND the node can actually flash (writable
+    # filesystem + sha256 lib). The capability gate is what stops the hub ever
+    # pushing firmware to a node that can't safely receive it.
+    ota = None
+    if cfg.ota_enabled:
+        try:
+            from otaflash import OTA
+            ota = OTA()
+            if ota.available:
+                cap.append("ota")
+            else:
+                log_error("OTA_ENABLED but filesystem read-only or no adafruit_hashlib")
+        except Exception as e:
+            log_error("OTA init failed: %s" % e)
+            ota = None
 
     net = NetLink(cfg)
     STATUS.set("netdown")
@@ -412,7 +498,7 @@ def main():
             net.connect()
             reader.reset()
             backchannel.reset_tx()  # abandon any serial writes left from a dropped link
-            net.send(encode(messages.hello(cfg.node_id, cfg.token, FW_VERSION, cap)))
+            net.send(encode(messages.hello(cfg.node_id, cfg.token, FW_VERSION, cap, layout_name)))
             print("connected; hello sent")
             if boot_watchdog and not reported_reset:
                 # Surface a prior hang in the hub's Events feed, since there is no
@@ -421,7 +507,7 @@ def main():
                 reported_reset = True
             backoff = cfg.backoff_start_ms  # reset backoff on a good connect
             STATUS.set("online")
-            run_session(net, reader, injector, backchannel, state, cfg, wdt)
+            run_session(net, reader, injector, backchannel, state, cfg, wdt, ota)
         except (ConnectionError, OSError, RuntimeError, ProtocolError) as e:
             print("link down:", e)
         finally:

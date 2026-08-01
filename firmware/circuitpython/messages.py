@@ -4,9 +4,16 @@
 # read. Each returns a plain dict; wire.encode turns it into a frame.
 
 
-def hello(node_id, token, fw, cap):
-    """Sent once on connect. The hub validates `token` before anything else."""
-    return {"type": "hello", "id": node_id, "token": token, "fw": fw, "cap": cap}
+def hello(node_id, token, fw, cap, layout=None):
+    """Sent once on connect. The hub validates `token` before anything else.
+
+    `layout` is the active keyboard layout code (e.g. "us", "de"); the hub keeps
+    it as read-only node detail. Omitted by old firmware, which the hub treats as
+    unknown/US."""
+    msg = {"type": "hello", "id": node_id, "token": token, "fw": fw, "cap": cap}
+    if layout is not None:
+        msg["layout"] = layout
+    return msg
 
 
 def heartbeat(node_id):

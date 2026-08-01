@@ -39,6 +39,11 @@ class ProcessConfig:
     db_path: Path = _env_path("HUB_DB_PATH", BASE_DIR / "data" / "hub.db")
     static_dir: Path = _env_path("HUB_STATIC_DIR", BASE_DIR / "static")
 
+    # Bind host for the raw serial bridge listeners. Keep it on the management
+    # interface; default binds all interfaces like the other faces, fine on an
+    # isolated VLAN. Set HUB_BRIDGE_HOST to a specific IP on a multi-homed hub.
+    bridge_host: str = os.environ.get("HUB_BRIDGE_HOST", "0.0.0.0")
+
     # How often the liveness sweep runs and how often batched output is flushed.
     sweep_interval_ms: int = _env_int("HUB_SWEEP_INTERVAL_MS", 3000)
     output_flush_interval_ms: int = _env_int("HUB_OUTPUT_FLUSH_INTERVAL_MS", 500)
@@ -62,10 +67,19 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "event_retention_days": 90,
     "require_confirm_dangerous": True,
     "auth_enabled": False,
+    # Raw serial bridge (phase 8): expose each assigned node's serial as a TCP
+    # port for minicom/PuTTY/etc. Off by default; the port map lives in the
+    # serial_bridge table. Bind host is process-level (HUB_BRIDGE_HOST).
+    "serial_bridge_enabled": False,
+    # Alerting (phase 11): outbound webhook/ntfy on notable events. Off by default.
+    "alerts_enabled": False,
+    "alerts_webhook_url": "",
+    "alerts_ntfy_url": "",
 }
 
 # Settings whose values are booleans, so the settings API can coerce correctly.
-BOOL_SETTINGS = {"require_confirm_dangerous", "auth_enabled"}
+BOOL_SETTINGS = {"require_confirm_dangerous", "auth_enabled", "serial_bridge_enabled",
+                 "alerts_enabled"}
 INT_SETTINGS = {
     "heartbeat_interval_ms",
     "stale_timeout_ms",

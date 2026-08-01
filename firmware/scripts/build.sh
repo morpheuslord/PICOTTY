@@ -49,7 +49,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ENTRY=(boot.py code.py)
-MODULES=(wire.py netlink.py injector.py backchannel.py nodeconfig.py messages.py)
+MODULES=(wire.py netlink.py injector.py backchannel.py nodeconfig.py messages.py otaflash.py)
 
 if [[ "$STAGE" == "1" ]]; then
   DEST="${STAGE_DIR:-$FW_DIR/build/${NODE:-node}}"
@@ -135,6 +135,43 @@ if [[ -n "$SRC_TOML" ]]; then
   fi
 else
   echo "note: no --node/--settings given; settings.toml not included."
+fi
+
+# Keyboard layout library. "us" is built into adafruit_hid; any other layout
+# needs a community library pair (keyboard_layout_win_<code> + keycode_win_<code>)
+# from Neradoc's CircuitPython_Keyboard_Layouts bundle. Read the layout from the
+# settings we just staged and fetch just that one, so a de/uk/fr node types its
+# symbols correctly. A missing library is non-fatal: the firmware falls back to US.
+if [[ "$LIBS" == "1" && -f "$DEST/settings.toml" ]]; then
+  LAYOUT="$(sed -n 's/^[[:space:]]*KEYBOARD_LAYOUT[[:space:]]*=[[:space:]]*"\{0,1\}\([A-Za-z_]*\).*/\1/p' "$DEST/settings.toml" | head -n1 | tr 'A-Z' 'a-z')"
+  if [[ -n "$LAYOUT" && "$LAYOUT" != "us" && "$LAYOUT" != "en" && "$LAYOUT" != "en_us" ]]; then
+    if command -v circup >/dev/null; then
+      echo "==> Installing keyboard layout '$LAYOUT' (community bundle)"
+      circup bundle-add Neradoc/CircuitPython_Keyboard_Layouts >/dev/null 2>&1 || true
+      if ! circup --path "$DEST" install "keyboard_layout_win_$LAYOUT" "keycode_win_$LAYOUT"; then
+        echo "  warning: could not stage layout '$LAYOUT'. The node will fall back to US."
+        echo "  Fetch it manually into $DEST/lib/ from CircuitPython_Keyboard_Layouts,"
+        echo "  or set KEYBOARD_LAYOUT = \"us\"."
+      fi
+    else
+      echo "warning: KEYBOARD_LAYOUT='$LAYOUT' but circup not found; node will fall back to US."
+    fi
+  fi
+fi
+
+# OTA needs a SHA-256 implementation on the node (CircuitPython has no hashlib),
+# so stage adafruit_hashlib when the node has OTA_ENABLED. Without it the node
+# simply won't advertise the `ota` capability and the hub won't push to it.
+if [[ "$LIBS" == "1" && -f "$DEST/settings.toml" ]]; then
+  if grep -qiE '^[[:space:]]*OTA_ENABLED[[:space:]]*=[[:space:]]*"?(1|true|yes|on)"?' "$DEST/settings.toml"; then
+    if command -v circup >/dev/null; then
+      echo "==> Installing adafruit_hashlib (OTA sha256 verify)"
+      circup --path "$DEST" install adafruit_hashlib || \
+        echo "  warning: could not stage adafruit_hashlib; node will not offer OTA."
+    else
+      echo "warning: OTA_ENABLED but circup not found; node will not offer OTA."
+    fi
+  fi
 fi
 
 if [[ "$STAGE" == "1" ]]; then

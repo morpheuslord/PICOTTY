@@ -32,12 +32,18 @@ class NodeState:
     status: str = "online"  # "online" | "busy" | "offline"
     fw_version: str = ""
     capabilities: list = field(default_factory=list)
+    layout: str = "us"  # keyboard layout the node reported in hello (read-only)
     rtt_ms: Optional[int] = None
     inflight: dict = field(default_factory=dict)  # cmd_id -> Inflight
+    # Live prompt-state classification (registry-only, like rtt_ms). Set by the
+    # output classifier; None until enough output has been seen.
+    prompt_state: Optional[str] = None
+    tail: str = ""  # rolling tail of recent output the classifier reads
 
     # Not part of the persisted model; live socket bookkeeping.
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     pending_pongs: dict = field(default_factory=dict)  # nonce -> asyncio.Future
+    pending_results: dict = field(default_factory=dict)  # 'r_' cmd_id -> Future (OTA request/reply)
 
     @property
     def ip(self) -> str:

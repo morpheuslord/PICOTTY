@@ -17,8 +17,9 @@ from ..core import Hub
 from ..protocol import validate_send
 from ..utils import gen_token, hash_token, now_ms
 from .models import (
-    BulkCmd, CmdBody, KeysBody, LoginBody, MacroCreate, MacroPatch, MacroRun,
-    NodePatch, SequenceBody, SettingsPatch,
+    BulkCmd, CmdBody, ExpectBody, KeysBody, LoginBody, MacroCreate, MacroPatch,
+    MacroRun, NodePatch, OTABundleCreate, OTAPush, OTARollout, QueueBody,
+    RunbookCreate, RunbookPatch, RunbookRun, SequenceBody, SettingsPatch,
 )
 
 router = APIRouter()
@@ -206,6 +207,47 @@ async def node_output(request: Request, node_id: str, since: int = None,
     return {"ok": True, "chunks": chunks, "has_more": len(rows) == limit}
 
 
+@router.get("/nodes/{node_id}/session.cast")
+async def session_cast(request: Request, node_id: str, since: int = None,
+                       before: int = None, width: int = 100, height: int = 30):
+    """Stream the node's console over a time window as an asciicast v2 recording.
+
+    `since`/`before` are received_at bounds in ms (the same clock as output
+    timestamps). Built from output_log, so no capture path is needed: an install
+    or a crash can be replayed at real speed. Node `ts` is deliberately ignored —
+    the Picos have no RTC, so we use the hub's received_at as the authoritative
+    clock (see operations.md)."""
+    import json as _json
+    hub = hub_of(request)
+    await hub.db.flush_output()
+    start = await hub.db.output_window_start(node_id, since, before)
+
+    async def gen():
+        header = {"version": 2, "width": width, "height": height}
+        if start is not None:
+            header["timestamp"] = start // 1000
+        yield _json.dumps(header) + "\n"
+        if start is None:
+            return
+        async for ts, text in hub.db.iter_output_window(node_id, since, before):
+            offset = max(0.0, (ts - start) / 1000.0)
+            yield _json.dumps([round(offset, 3), "o", text]) + "\n"
+
+    headers = {"Content-Disposition": 'attachment; filename="%s.cast"' % node_id}
+    return StreamingResponse(gen(), media_type="application/x-asciicast", headers=headers)
+
+
+@router.get("/output/search")
+async def output_search(request: Request, q: str, node_id: str = None, limit: int = 200):
+    """Find where a string scrolled past in the console history."""
+    hub = hub_of(request)
+    if not q:
+        return err("bad_query", "q is required")
+    await hub.db.flush_output()
+    rows = await hub.db.search_output(q, node_id=node_id, limit=min(limit, 1000))
+    return {"ok": True, "matches": rows}
+
+
 @router.get("/nodes/{node_id}/output/download")
 async def node_output_download(request: Request, node_id: str):
     hub = hub_of(request)
@@ -240,6 +282,167 @@ async def bulk_cmd(request: Request, body: BulkCmd):
         if body.stagger_ms and i < len(body.node_ids) - 1:
             await asyncio.sleep(body.stagger_ms / 1000)
     return {"ok": True, "dispatched": dispatched}
+
+
+# -- OTA firmware updates -----------------------------------------------------
+
+@router.get("/ota/bundles")
+async def ota_bundles(request: Request):
+    hub = hub_of(request)
+    return {"ok": True, "bundles": hub.ota.list_bundles()}
+
+
+@router.post("/ota/bundles")
+async def ota_create_bundle(request: Request, body: OTABundleCreate):
+    hub = hub_of(request)
+    from ..ota import OTAError
+    try:
+        manifest = hub.ota.create_bundle(body.name, [f.model_dump() for f in body.files])
+    except OTAError as e:
+        return JSONResponse(status_code=422, content=err("bad_bundle", str(e)))
+    await hub.audit("settings", None, "OTA bundle %s uploaded (%d files)" % (body.name, len(body.files)))
+    return {"ok": True, "manifest": manifest}
+
+
+@router.post("/nodes/{node_id}/ota")
+async def ota_push(request: Request, node_id: str, body: OTAPush):
+    hub = hub_of(request)
+    if not hub.registry.is_online(node_id):
+        return err("node_offline", "node %s is not connected" % node_id)
+    res = hub.ota.start_push(node_id, body.bundle)
+    if not res.get("ok"):
+        status = 404 if res.get("error") == "no_bundle" else 422
+        return JSONResponse(status_code=status, content=res)
+    return res
+
+
+@router.get("/nodes/{node_id}/ota/{job_id}")
+async def ota_status(request: Request, node_id: str, job_id: str):
+    hub = hub_of(request)
+    job = hub.ota.get_job(job_id)
+    if not job:
+        return err("not_found", "no such ota job")
+    return {"ok": True, "job": job}
+
+
+@router.post("/bulk/ota")
+async def ota_rollout(request: Request, body: OTARollout):
+    hub = hub_of(request)
+    import asyncio
+    if hub.ota.get_manifest(body.bundle) is None:
+        return err("no_bundle", "no such bundle %s" % body.bundle)
+    # A canary rollout gates on the first node coming back healthy, which can take
+    # up to a minute, so run it as a background task and let the UI follow
+    # ota_progress events rather than blocking the request.
+    asyncio.get_event_loop().create_task(
+        hub.ota.rollout(body.node_ids, body.bundle, body.stagger_ms or 0))
+    await hub.audit("settings", None, "OTA rollout of %s to %d node(s) started" % (body.bundle, len(body.node_ids)))
+    return {"ok": True, "detail": "rollout started; watch ota_progress events", "nodes": body.node_ids}
+
+
+# -- raw serial bridge --------------------------------------------------------
+
+@router.get("/bridge")
+async def bridge_list(request: Request):
+    hub = hub_of(request)
+    return {"ok": True, "enabled": bool(hub.settings.get("serial_bridge_enabled")),
+            "bind": config.PROCESS.bridge_host, "ports": await hub.db.list_bridge_ports()}
+
+
+@router.post("/nodes/{node_id}/bridge")
+async def bridge_assign(request: Request, node_id: str, port: int):
+    hub = hub_of(request)
+    if port < 1024 or port > 65535:
+        return err("bad_port", "port must be 1024-65535")
+    existing = {r["port"]: r["node_id"] for r in await hub.db.list_bridge_ports()}
+    if port in existing and existing[port] != node_id:
+        return err("port_taken", "port %d is already assigned to %s" % (port, existing[port]))
+    if port in (config.PROCESS.tcp_port, config.PROCESS.http_port):
+        return err("bad_port", "port collides with a hub face")
+    await hub.db.assign_bridge_port(node_id, port)
+    await hub.bridge.reconcile()
+    await hub.audit("settings", node_id, "serial bridge assigned port %d" % port)
+    return {"ok": True, "node_id": node_id, "port": port,
+            "enabled": bool(hub.settings.get("serial_bridge_enabled"))}
+
+
+@router.delete("/nodes/{node_id}/bridge")
+async def bridge_unassign(request: Request, node_id: str):
+    hub = hub_of(request)
+    await hub.db.remove_bridge_port(node_id)
+    await hub.bridge.reconcile()
+    await hub.audit("settings", node_id, "serial bridge port removed")
+    return {"ok": True}
+
+
+# -- offline command queue ----------------------------------------------------
+
+@router.post("/nodes/{node_id}/queue")
+async def enqueue(request: Request, node_id: str, body: QueueBody):
+    hub = hub_of(request)
+    command = body.command.model_dump(exclude_none=True)
+    ctype = command.get("type")
+    if ctype == "send":
+        ok, code, detail = validate_send(command)
+        if not ok:
+            status = 413 if code == "too_large" else 422
+            return JSONResponse(status_code=status, content=err(code, detail))
+    ts = now_ms()
+    expires_at = (ts + body.ttl_ms) if body.ttl_ms else None
+    qid = await hub.db.enqueue_command(node_id, ctype, command, None, ts, expires_at)
+    await hub.audit("cmd", node_id, "queued %s for delivery on connect (q%d)" % (ctype, qid))
+    # If the node happens to be online right now, drain immediately.
+    if hub.registry.is_online(node_id):
+        await hub.drain_queue(node_id)
+    return {"ok": True, "id": qid, "expires_at": expires_at}
+
+
+@router.get("/nodes/{node_id}/queue")
+async def list_queue(request: Request, node_id: str):
+    hub = hub_of(request)
+    return {"ok": True, "queued": await hub.db.list_queued(node_id)}
+
+
+@router.delete("/nodes/{node_id}/queue/{qid}")
+async def cancel_queue(request: Request, node_id: str, qid: int):
+    hub = hub_of(request)
+    n = await hub.db.cancel_queued(qid)
+    if not n:
+        return err("not_found", "no pending queued command %d" % qid)
+    return {"ok": True}
+
+
+# -- expect (wait-for-output automation) --------------------------------------
+
+@router.post("/nodes/{node_id}/expect")
+async def post_expect(request: Request, node_id: str, body: ExpectBody):
+    hub = hub_of(request)
+    if not hub.registry.is_online(node_id):
+        return err("node_offline", "node %s is not connected" % node_id)
+    res = hub.expect.start(node_id, body.steps)
+    if not res.get("ok"):
+        status = 409 if res.get("error") == "busy" else 422
+        return JSONResponse(status_code=status, content=res)
+    await hub.audit("cmd", node_id, "expect job %s started (%d steps)" % (res["job_id"], len(body.steps)))
+    return res
+
+
+@router.get("/nodes/{node_id}/expect/{job_id}")
+async def get_expect(request: Request, node_id: str, job_id: str):
+    hub = hub_of(request)
+    snap = hub.expect.get(job_id)
+    if not snap:
+        return err("not_found", "no such expect job")
+    return {"ok": True, "job": snap}
+
+
+@router.post("/nodes/{node_id}/expect/{job_id}/cancel")
+async def cancel_expect(request: Request, node_id: str, job_id: str):
+    hub = hub_of(request)
+    res = hub.expect.cancel(job_id)
+    if not res.get("ok"):
+        return err(res.get("error", "error"))
+    return {"ok": True}
 
 
 # -- macros -------------------------------------------------------------------
@@ -292,6 +495,79 @@ async def run_macro(request: Request, macro_id: int, body: MacroRun):
     return {"ok": True, "dispatched": dispatched}
 
 
+# -- runbooks -----------------------------------------------------------------
+
+@router.get("/runbooks")
+async def list_runbooks(request: Request):
+    hub = hub_of(request)
+    return {"ok": True, "runbooks": await hub.db.list_runbooks()}
+
+
+@router.post("/runbooks")
+async def create_runbook(request: Request, body: RunbookCreate):
+    hub = hub_of(request)
+    ok, detail = hub.runbooks.validate(body.yaml)
+    if not ok:
+        return JSONResponse(status_code=422, content=err("bad_runbook", detail))
+    rid = await hub.db.create_runbook(body.name, body.yaml)
+    return {"ok": True, "id": rid}
+
+
+@router.get("/runbooks/{rid}")
+async def get_runbook(request: Request, rid: int):
+    hub = hub_of(request)
+    rb = await hub.db.get_runbook(rid)
+    if not rb:
+        return err("not_found", "no such runbook")
+    return {"ok": True, "runbook": rb}
+
+
+@router.patch("/runbooks/{rid}")
+async def patch_runbook(request: Request, rid: int, body: RunbookPatch):
+    hub = hub_of(request)
+    if body.yaml is not None:
+        ok, detail = hub.runbooks.validate(body.yaml)
+        if not ok:
+            return JSONResponse(status_code=422, content=err("bad_runbook", detail))
+    await hub.db.update_runbook(rid, name=body.name, yaml_text=body.yaml)
+    return {"ok": True}
+
+
+@router.delete("/runbooks/{rid}")
+async def delete_runbook(request: Request, rid: int):
+    hub = hub_of(request)
+    await hub.db.delete_runbook(rid)
+    return {"ok": True}
+
+
+@router.post("/runbooks/{rid}/run")
+async def run_runbook(request: Request, rid: int, body: RunbookRun):
+    hub = hub_of(request)
+    rb = await hub.db.get_runbook(rid)
+    if not rb:
+        return err("not_found", "no such runbook")
+    node_ids = list(body.node_ids or [])
+    if body.group:
+        rows = await hub.db.list_nodes()
+        node_ids += [r["id"] for r in rows if r.get("group_name") == body.group]
+    if not node_ids:
+        return err("no_targets", "no target nodes (pass node_ids or a group)")
+    res = await hub.runbooks.start(rb, node_ids, body.stagger_ms or 0)
+    if not res.get("ok"):
+        return JSONResponse(status_code=422, content=res)
+    await hub.audit("cmd", None, "runbook %s run %s on %d node(s)" % (rb["name"], res["run_id"], len(res["nodes"])))
+    return res
+
+
+@router.get("/runbooks/{rid}/runs/{run_id}")
+async def get_runbook_run(request: Request, rid: int, run_id: str):
+    hub = hub_of(request)
+    run = hub.runbooks.get(run_id)
+    if not run:
+        return err("not_found", "no such run")
+    return {"ok": True, "run": run}
+
+
 # -- events -------------------------------------------------------------------
 
 @router.get("/events")
@@ -332,6 +608,9 @@ async def patch_settings(request: Request, body: SettingsPatch):
         return {"ok": True, "settings": await hub.db.get_settings()}
     await hub.db.set_settings(values)
     await hub.load_settings()  # apply live (the sweep reads hub.settings)
+    # A toggled serial_bridge_enabled must bind/unbind listeners immediately.
+    if "serial_bridge_enabled" in values and hub.bridge is not None:
+        await hub.bridge.reconcile()
     await hub.audit("settings", None, "updated: %s" % ", ".join(values.keys()))
     return {"ok": True, "settings": await hub.db.get_settings()}
 
