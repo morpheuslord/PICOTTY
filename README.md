@@ -38,7 +38,20 @@ One page drives the whole swarm. **Click any screenshot to open it at full resol
     <td width="50%" align="center"><a href="pictures/Event%20History.png"><img src="pictures/Event%20History.png" alt="Event history" width="100%"></a><br><sub><b>Event history</b> — every connect, command, and fault, timestamped</sub></td>
     <td width="50%" align="center"><a href="pictures/Settings.png"><img src="pictures/Settings.png" alt="Settings" width="100%"></a><br><sub><b>Settings</b> — heartbeat, retention, token rotation, confirm-dangerous</sub></td>
   </tr>
+  <tr>
+    <td width="50%" align="center"><a href="pictures/runbook_creation.png"><img src="pictures/runbook_creation.png" alt="Runbook creation" width="100%"></a><br><sub><b>Runbook creation</b> — author a YAML expect flow, validated on save</sub></td>
+    <td width="50%" align="center"><a href="pictures/runbook_selection.png"><img src="pictures/runbook_selection.png" alt="Runbook library" width="100%"></a><br><sub><b>Runbook library</b> — pick a saved runbook, run it across a group</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="pictures/OTA%20Firmware%20Menu.png"><img src="pictures/OTA%20Firmware%20Menu.png" alt="OTA firmware menu" width="100%"></a><br><sub><b>OTA firmware menu</b> — push a bundle to a node, live byte-progress and health check</sub></td>
+    <td width="50%" align="center"><a href="pictures/OTA%20quick%20update%20options.png"><img src="pictures/OTA%20quick%20update%20options.png" alt="OTA quick update options" width="100%"></a><br><sub><b>OTA quick update options</b> — manage bundles, .zip upload, canary rollout</sub></td>
+  </tr>
 </table>
+
+<p align="center">
+  <a href="pictures/help.png"><img src="pictures/help.png" alt="In-app help" width="900"></a><br>
+  <sub><b>In-app help</b> — every control, its REST endpoint, and the gotchas, built into the hub</sub>
+</p>
 
 ---
 
@@ -56,10 +69,14 @@ One page drives the whole swarm. **Click any screenshot to open it at full resol
   path make a node with no monitor diagnosable.
 
 **What's new:** interactive serial write with a real terminal renderer, per-node
-prompt-state badges, a wait-for-output **expect engine** and YAML **runbooks**, an
-offline command queue, **asciicast** session replay, a raw **serial bridge** for
-`minicom`/PuTTY, webhook/**ntfy** alerting, per-node keyboard layouts, and
-**OTA firmware updates** (chunked, checksummed, canary rollout with watchdog-revert). Depth in
+prompt-state badges, a **machine up/dead liveness badge** (is the *target* alive,
+not just the node), a wait-for-output **expect engine** and YAML **runbooks**
+(author, view, and edit in the browser), a **Reboot-machine menu** with three
+methods (serial `reboot`, Ctrl+Alt+Del, Magic SysRq `Alt+SysRq+B`), **custom
+quick chords** you save and replay, an offline command queue, **asciicast**
+session replay, a raw **serial bridge** for `minicom`/PuTTY, webhook/**ntfy**
+alerting, per-node keyboard layouts, and **OTA firmware updates** (chunked,
+checksummed, **.zip-upload** bundles, canary rollout with watchdog-revert). Depth in
 **[docs/automation.md](docs/automation.md)**, **[docs/operations.md](docs/operations.md)**,
 and **[docs/ota.md](docs/ota.md)**.
 

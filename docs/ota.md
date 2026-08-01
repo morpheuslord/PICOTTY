@@ -5,6 +5,7 @@
 - [Current status](#current-status)
 - [Why this is the highest-risk feature](#why-this-is-the-highest-risk-feature)
 - [The safety model](#the-safety-model)
+- [Creating a bundle: files or a .zip](#creating-a-bundle-files-or-a-zip)
 - [The push flow](#the-push-flow)
 - [Rollout posture: canary, one node at a time](#rollout-posture-canary-one-node-at-a-time)
 - [The writable-filesystem trade-off](#the-writable-filesystem-trade-off)
@@ -85,13 +86,114 @@ and hasn't successfully run yet" — which is precisely the window you want it i
 All of `otaflash.py`'s filesystem operations swallow errors during boot recovery:
 recovery must never itself raise in `boot.py` and brick a node.
 
+The whole commit → reboot → recover-or-finalize decision, end to end:
+
+```mermaid
+flowchart TD
+    A[ota_commit: verify every file's size and SHA-256] -->|mismatch| Z[Discard staging, live firmware untouched]
+    A -->|all match| B[Swap staged files in]
+    B --> C[Rename each replaced file to file.bak]
+    C --> D[Write /ota_pending.json marker]
+    D --> E[supervisor.reload onto new firmware]
+    E --> F{Next boot: what kind of reset?}
+    F -->|watchdog reset, new firmware hung| G[recover_if_pending restores the .bak set and clears the marker]
+    F -->|clean boot, connects, runs a heartbeat| H[finalize deletes the .bak files and the marker]
+    G --> I[Node returns on the old, known-good firmware]
+    H --> J[New firmware is now permanent, cannot be reverted]
+```
+
 ### Path safety
 
 A bundle path must be a plain relative path under the drive root — no leading `/`,
 no `..` traversal. A hostile or malformed manifest cannot write outside
 `CIRCUITPY`.
 
+## Creating a bundle: files or a .zip
+
+Before anything is pushed, the firmware to ship lives on the hub as a **bundle** —
+a directory under `hub/data/firmware/<name>/` holding the file blobs and a
+`manifest.json` (each file's path, size, and SHA-256, plus a `total_sha256`).
+There are two ways to create one.
+
+**From hand-picked files** — `POST /api/ota/bundles`:
+
+```json
+{"name": "node-01-v3", "files": [{"path": "code.py", "content_b64": "..."},
+                                  {"path": "nodeconfig.py", "content_b64": "..."}]}
+```
+
+Each file is base64 in the request; the dashboard's "Manage bundles…" sheet reads
+the picked files in the browser and fills this in. The name must match
+`[A-Za-z0-9._-]{1,64}`.
+
+### Uploading a bundle as a .zip
+
+Picking files one by one is fine for a one-line patch but tedious for a whole
+firmware (with `lib/` that is hundreds of files). Instead, upload the entire
+firmware as a single `.zip` — `POST /api/ota/bundles/zip`:
+
+```json
+{"name": "node-01-v3", "zip_b64": "<base64 of a .zip>"}
+```
+
+`zip_b64` is the base64 of a `.zip` archive. The hub **decompresses it
+server-side** and stages every entry, so the browser never has to enumerate the
+files. Two conveniences make the archive "just work":
+
+- **A single shared top-level directory is stripped.** Zipping the *folder*
+  `Node-Main/` yields entries like `Node-Main/code.py`; the hub detects that every
+  entry shares one leading directory and strips it, so the bundle contains
+  `code.py`, not `Node-Main/code.py`. (A flat zip with no common prefix is left
+  as-is.)
+- **Junk entries are skipped** — `__MACOSX/`, `.DS_Store`, `boot_out.txt`,
+  `Thumbs.db` are never staged.
+
+Every path is then validated exactly like a hand-built bundle (plain relative
+paths only — no leading `/`, no `..`), and the same size/count caps apply
+(≤ 400 files, ≤ 1 MiB/file, ≤ 8 MiB/bundle). A malformed archive is rejected with
+HTTP **422** (`bad_zip`, or `not a valid zip file`); the bundle name defaults to
+the uploaded file's basename (sanitized) when the name field is blank.
+
+**`build.sh` already produces exactly this.** Building with `--stage` writes both
+`firmware/build/<node>/` and `firmware/build/<node>.zip` — that `.zip` is precisely
+what the upload endpoint expects, so the normal path is: build the node artifact,
+then upload its `.zip` as a bundle.
+
+```bash
+bash firmware/scripts/build.sh --node <id> --stage   # -> firmware/build/<id>.zip
+#   …then upload firmware/build/<id>.zip via "Upload .zip" (or POST /api/ota/bundles/zip)
+```
+
+<p align="center">
+  <img src="../pictures/OTA%20Firmware%20Menu.png" alt="The per-node OTA firmware push panel — bundle picker and live byte-progress" width="820">
+  <br><sub>The per-node OTA panel: pick a bundle, push, and watch live byte-progress until the node reports healthy.</sub>
+</p>
+
 ## The push flow
+
+Once a bundle exists, pushing it to a node (`POST /api/nodes/{id}/ota`) runs the
+begin → chunk → commit → reconnect flow below. Progress streams to every browser
+as `ota_progress` events; poll `GET /api/nodes/{id}/ota/{job}` for a snapshot.
+
+```mermaid
+sequenceDiagram
+    actor Op as Operator
+    participant Hub
+    participant Node as Node (Pico)
+    Op->>Hub: Create bundle (pick files or upload .zip)
+    Op->>Hub: Push bundle to node
+    Hub->>Node: ota_begin {files[path,size,sha256], total_sha256}
+    Node-->>Hub: ok — staging opened, one file per entry
+    loop each file, in 512 B chunks
+        Hub->>Node: ota_chunk {path, seq, data as hex}
+        Node-->>Hub: ok — appended to staging, running hash updated
+    end
+    Hub->>Node: ota_commit {}
+    Node-->>Hub: ok — every size + SHA-256 verified, swapped in
+    Note over Node: writes .bak backups + /ota_pending marker, then supervisor.reload()
+    Node->>Hub: hello — reconnects on the new firmware
+    Hub->>Hub: canary gate — reconnected healthy?
+```
 
 Three node commands carry a bundle, designed to stream without growing memory:
 
@@ -123,6 +225,17 @@ canary — push to one node, wait for it to reconnect on the new `fw` version an
 run a clean heartbeat (i.e. prove rail 4 didn't have to fire), and only then
 proceed to the next node or small batch. A bad bundle then costs you exactly one
 node's auto-revert cycle, not a dark rack.
+
+```mermaid
+flowchart TD
+    A[Rollout: node list + bundle] --> B[Push to the first node, the canary]
+    B --> C{Canary reconnected healthy?}
+    C -->|no| D[Abort rollout, report canary status, touch nothing else]
+    C -->|yes| E[Push to the next node]
+    E --> F{More nodes left?}
+    F -->|yes, wait stagger_ms| E
+    F -->|no| G[Rollout complete]
+```
 
 Verify the revert path deliberately before trusting it in production: push a
 knowingly-broken `code.py` to a single bench node and confirm it watchdog-resets,
