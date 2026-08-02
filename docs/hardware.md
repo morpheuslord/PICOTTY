@@ -84,8 +84,17 @@ graph TD
 | Component | Role | Qty | Notes |
 |---|---|---|---|
 | **Raspberry Pi Zero 2 W** | Runs the hub: FastAPI dashboard, raw-TCP node server, SQLite history | 1 | Give it a **static IP** — nodes dial it by address. 64-bit Raspberry Pi OS installs the Python wheels (uvicorn/pydantic-core) most smoothly. Any always-on Linux box works too. |
+| **Wired Ethernet for the hub** | Puts the hub on the **same wired management segment as the nodes** | 1 | The Zero 2 W has **no built-in Ethernet** (only Wi-Fi). Add wired networking with an Ethernet HAT — e.g. the **Waveshare Ethernet/USB HUB HAT** (also a WIZnet W5500-based Ethernet HAT) — or a USB-OTG Ethernet adapter. See the note below. |
 | **microSD card** (8 GB+) | Hub OS + the SQLite database | 1 | |
 | **USB power supply** | Powers the hub | 1 | |
+
+> **Put the hub on wired Ethernet.** The nodes reach the hub over wired Ethernet
+> (SPI → RJ45), so the hub belongs on that same switched/VLAN segment. The Pi Zero
+> 2 W has only Wi-Fi on-board, so give it a wired NIC: an **Ethernet HAT** such as
+> the **Waveshare Ethernet/USB HUB HAT** (or any W5500/USB-Ethernet HAT), or a
+> USB-OTG Ethernet dongle. Wi-Fi *works* for a bench test, but a wired hub is the
+> production posture — it keeps hub↔node traffic on one isolated management
+> segment and avoids Wi-Fi drops taking the whole fleet's control plane with them.
 
 **Fabric** — shared:
 
