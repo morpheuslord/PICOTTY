@@ -18,6 +18,18 @@ browser dashboard to watch every node and drive it, over your management network
 > its serial line and types back into it. Reading output therefore depends on the
 > target actually having a serial console configured.
 
+## Why this exists
+
+I built PICOTTY for my own homelab, which runs on a rack of **mini PCs**. Unlike
+a server, those boxes expose **no accessible serial port** — no BMC/IPMI, no
+DB9/RJ45 console, often not even a usable header — so there's no out-of-band way
+to see a stuck boot, poke a frozen box, catch a kernel panic, or drive the BIOS
+without walking over and plugging in a keyboard and monitor. PICOTTY gives every
+one of those headless machines exactly that, **over the network**: a tiny Pico on
+its USB port acts as a USB keyboard (so you can type at BIOS, GRUB, and the OS)
+and reads back a serial console, all surfaced in one browser dashboard. It's the
+lights-out management a fleet of consumer mini PCs never shipped with.
+
 ---
 
 ## The dashboard
