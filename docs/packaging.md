@@ -148,19 +148,37 @@ uv publish                              # dist/*.whl + *.tar.gz -> PyPI
 The version is single-sourced in `hub/pyproject.toml` (`__init__.py` reads it back
 from installed metadata) — bump it in one place, tag, and CI does the rest.
 
-### Trusted Publishing (preferred)
+### Release from GitHub (preferred)
 
-Publish from CI with **no long-lived token** — PyPI Trusted Publishing (OIDC). The
-account/owner is `morpheus_lord`; before the first CI publish, configure a PyPI
-**pending publisher** for project `picotty` pointing at this GitHub repo and the
-`publish.yml` workflow (PyPI → *Your projects* → *Publishing*, or *Pending publishers*
-for a project that does not yet exist). Once that trust is registered, the tagged
-release workflow authenticates over OIDC — see
-[`.github/workflows/publish.yml`](../.github/workflows/publish.yml).
+Publishing is wired to **GitHub Releases** with **PyPI Trusted Publishing** (OIDC,
+no long-lived token) — [`.github/workflows/publish.yml`](../.github/workflows/publish.yml).
+When you publish a release, the workflow builds the distributions with uv (fetching
+the vendored assets first) and uploads them with `pypa/gh-action-pypi-publish`, so
+the GitHub Release and the PyPI project stay linked.
 
-**Manual fallback** (from a laptop, or if OIDC is not yet set up): pass an API token —
+One-time setup (owner `morpheus_lord`):
+
+1. **PyPI → project `picotty` → Publishing** → add a trusted publisher (a *pending
+   publisher* if the project doesn't exist yet): owner/repo `morpheuslord/PICOTTY`,
+   workflow `publish.yml`, environment `pypi`.
+2. **GitHub → Settings → Environments** → create an environment named `pypi` (add
+   an approval protection rule if you want a manual gate before upload).
+
+Then each release ships itself:
+
+```text
+GitHub → Releases → Draft a new release
+  tag:    v1.0.0            (create it)
+  title:  v1.0.0
+  notes:  (the release notes)
+  Publish  →  publish.yml builds + uploads to PyPI
+```
+
+**Manual fallback** (from a laptop, or if OIDC isn't set up yet): build and push
+with an API token —
 
 ```bash
+cd hub && bash src/picotty/static/vendor/fetch-vendor.sh && uv build
 UV_PUBLISH_TOKEN=pypi-... uv publish
 ```
 
