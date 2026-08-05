@@ -20,6 +20,45 @@ inbound port, no webhook, no public endpoint. The only firewall change is an
 egress allow to `api.telegram.org` from the hub host. Stopping the sidecar
 removes the entire external surface with zero hub impact.
 
+## Setup
+
+Two ways to bring the sidecar up on the hub host. Both end at the **same
+credentials file** — `~/.config/picotty/telegram.env` — which the dashboard
+writes and the sidecar reads and hot-reloads. No path to align by hand.
+
+**A · From the dashboard (recommended).** In **Settings → the "Telegram sidecar"
+card**:
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and paste the **token**.
+2. Add your numeric **chat id** (get it from [@userinfobot](https://t.me/userinfobot)).
+3. For the shell tier, click **Generate** for a TOTP secret and add it to an
+   authenticator app — or turn "Enable shell tier" off for stats + alerts only.
+4. **Save** — the hub validates the token via `getMe` and writes the file.
+5. Click **Install / start sidecar** — the hub runs the installer (`uv sync` +
+   the shared `.env`) and enables the service, streaming the output into the card.
+   The card's status line then reads **sidecar running**.
+
+The install button's service step needs passwordless sudo on the hub (typical on
+Raspberry Pi OS); if that isn't set up, the output panel prints the one command to
+run by hand.
+
+**B · From the shell.**
+
+```bash
+bash telegram-bot/scripts/install.sh          # uv venv + the shared ~/.config/picotty/telegram.env
+# fill that file in — by hand, or from the dashboard card above
+bash telegram-bot/scripts/run.sh              # foreground test
+bash telegram-bot/scripts/install-service.sh  # systemd unit (starts on boot)
+```
+
+Then in Telegram: `/status`, `/nodes`, `/uptime`, and — after `/arm <code>` —
+`/shell <node>`.
+
+> **After a `git pull` that changes hub code, restart the hub** —
+> `sudo systemctl restart swarm-hub` — or new REST routes (like the install
+> endpoint) return `405 Method Not Allowed`. The dashboard's static files update
+> live, but the Python server is loaded into memory at start.
+
 ## Capability tiers
 
 | Tier | Commands | Gate |
@@ -51,40 +90,43 @@ Tier 3 rides the hub `send` command and is gated on the node advertising
   surface at once.
 - **Egress**: allow the hub host outbound 443 to `api.telegram.org` only.
 
-## Dashboard setup flow
+## How the credential file works
 
 The sidecar's credentials are provisioned from the dashboard, so nothing
-sensitive is typed at a shell. **Settings → the "Telegram sidecar" card** writes
-the sidecar's env file *via the hub*:
+sensitive is typed at a shell. **Settings → the "Telegram sidecar" card** drives
+the hub's REST layer:
 
-- **`POST /api/telegram`** — validates the bot token against Telegram
-  (`getMe`) before saving, and writes the allowlist + shell/alert settings.
+- **`POST /api/telegram`** — validates the bot token against Telegram (`getMe`)
+  before saving, then writes the token, allowlist, and shell/alert settings.
 - **`POST /api/telegram/totp`** — generates a base32 TOTP secret and returns an
   `otpauth://` URI (render it as a QR for the authenticator app).
+- **`POST /api/telegram/install`** — the **Install / start sidecar** button: runs
+  the sidecar's own installer on the hub (`uv sync` + the shared `.env`) and
+  enables its systemd service, returning the captured output.
+- **`GET /api/telegram`** — the card's status: whether it's configured, the bot
+  username (via `getMe`), the chat count, and **`service_active`** (sidecar
+  running/stopped). Never returns the token or the TOTP secret — both are
+  **write-only**.
 
-The bot token and the TOTP secret are **write-only**: submitted through the card,
-never shown back after.
-
-The hub writes the file at **`TELEGRAM_ENV_PATH`** (default
-`~/.config/picotty/telegram.env`) at **chmod 600**. The sidecar reads the same
-file via **`TELEGRAM_ENV_FILE`** and **hot-reloads** the allowlist and the
-shell/alert settings whenever it changes — no restart. The one exception: a **bot
-token change needs a sidecar restart** (and is logged).
-
-> When the hub and sidecar are co-located, point `TELEGRAM_ENV_PATH` (hub) and
-> `TELEGRAM_ENV_FILE` (sidecar) at the **same path** — the hub writes it, the
-> sidecar reads it, hot-reload does the rest.
+**One file, no alignment needed.** Both the hub (`TELEGRAM_ENV_PATH`) and the
+sidecar (`TELEGRAM_ENV_FILE`) default to the same path, **`~/.config/picotty/
+telegram.env`** (chmod 600) — `install.sh` standardizes on it. The sidecar
+**hot-reloads** the allowlist and shell/alert settings whenever the file changes,
+with no restart. The one exception: a **bot-token change needs a sidecar restart**
+(python-telegram-bot binds the token at start), and the sidecar logs that it's
+required. A legacy in-repo `telegram-bot/.env` still works as a fallback and is
+migrated on the next `install.sh`.
 
 ```mermaid
 flowchart LR
   DASH["Dashboard<br/>Settings · Telegram card"]
-  HUB["Hub<br/>POST /api/telegram(/totp)"]
-  ENV["telegram.env<br/>chmod 600"]
-  SIDE["Sidecar<br/>TELEGRAM_ENV_FILE"]
+  HUB["Hub REST<br/>/api/telegram · /totp · /install"]
+  ENV["~/.config/picotty/telegram.env<br/>chmod 600"]
+  SIDE["Sidecar<br/>reads + hot-reloads"]
   TG["api.telegram.org"]
-  DASH -->|token + allowlist| HUB
+  DASH -->|token · allowlist · install| HUB
   HUB -->|getMe validates token| TG
-  HUB -->|writes TELEGRAM_ENV_PATH| ENV
+  HUB -->|writes the shared file| ENV
   ENV -->|hot-reload allowlist + settings| SIDE
   SIDE -->|outbound long-poll| TG
 ```
