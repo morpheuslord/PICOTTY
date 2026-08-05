@@ -153,8 +153,11 @@ from installed metadata) — bump it in one place, tag, and CI does the rest.
 Publishing is wired to **GitHub Releases** with **PyPI Trusted Publishing** (OIDC,
 no long-lived token) — [`.github/workflows/publish.yml`](../.github/workflows/publish.yml).
 When you publish a release, the workflow builds the distributions with uv (fetching
-the vendored assets first) and uploads them with `pypa/gh-action-pypi-publish`, so
-the GitHub Release and the PyPI project stay linked.
+the vendored assets first), **attaches the wheel + sdist to the GitHub Release**,
+and uploads them to PyPI with `pypa/gh-action-pypi-publish`, so the GitHub Release
+and the PyPI project stay linked. (A Python package doesn't appear under the repo's
+**Packages** menu — that registry has no PyPI backend — so the Release assets are
+the GitHub-side artifact.)
 
 One-time setup (owner `morpheus_lord`):
 

@@ -30,6 +30,8 @@ jobs:
   release-build:
     name: Build distributions (uv)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # attach the built wheel + sdist to the GitHub Release
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +56,15 @@ jobs:
         with:
           name: release-dists
           path: hub/dist/
+
+      # Attach the wheel + sdist to the GitHub Release page so they're downloadable
+      # right there (Python packages don't appear under the repo's Packages menu —
+      # that registry has no PyPI; the Release assets are the GitHub-side artifact).
+      - name: Attach distributions to the GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" hub/dist/* --clobber
 
   pypi-publish:
     name: Publish to PyPI (Trusted Publishing)

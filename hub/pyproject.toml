@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "picotty"
-version = "1.0.0"
+version = "1.0.1"
 description = "Networked serial console + USB HID keyboard injection for a fleet of headless machines — hub server, client SDK, and wire protocol."
 readme = "README.md"
 requires-python = ">=3.11"
