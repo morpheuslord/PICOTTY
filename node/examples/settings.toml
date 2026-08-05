@@ -1,0 +1,60 @@
+# settings.toml — copy to the CIRCUITPY drive root and edit for this node.
+#
+# CircuitPython reads this at the drive root. os.getenv() returns every value as
+# a STRING even when it looks like a number; picotty_node coerces ints itself.
+# Do not use leading zeros (parsed as octal), underscores, or 0x/0b prefixes.
+
+# --- Identity (required) -----------------------------------------------------
+# The id baked into this node — the ONLY thing tying it to its hub record.
+# Keep an id -> target-machine map somewhere safe.
+NODE_ID = "Node-01"
+
+# Shared secret the hub validates in the first frame. Must match the hub token.
+NODE_TOKEN = "change-me-to-the-hub-token"
+
+# --- Hub location (required) -------------------------------------------------
+# Use the hub's IP, not a hostname: no DNS keeps connect() fast (the watchdog
+# timeout is short).
+HUB_IP = "192.168.1.10"
+HUB_PORT = 9000
+
+# --- Timing / behavior -------------------------------------------------------
+# Heartbeat cadence (ms). The hub can also change this live via a config frame.
+HEARTBEAT_MS = 5000
+
+# Default per-character delay (ms) for typed text. Raise for slow BIOS/UEFI
+# consoles that drop input.
+CHAR_DELAY_MS = 0
+
+# Delay (ms) after USB enumeration before the first keystroke. BIOS targets may
+# want this larger.
+KEYBOARD_SETTLE_MS = 1000
+
+# HID keyboard layout the node types with. "us" needs no extra libs; any other
+# code (de/uk/fr/...) pulls the community `keyboard_layout_win_<code>` library,
+# which the build stages for you. Must match the target's configured layout or
+# punctuation/symbols land on the wrong keys.
+KEYBOARD_LAYOUT = "us"
+
+# Hardware watchdog: resets the node if the main loop hangs. On the RP2040 the
+# timeout must be <= 8 seconds.
+WATCHDOG_ENABLED = "true"
+WATCHDOG_TIMEOUT_S = 8
+
+# Write faults to /error.txt. WARNING: turning this on makes the CIRCUITPY drive
+# READ-ONLY over USB (drag-drop deploys stop). Leave "false" unless chasing a fault.
+LOG_TO_FILE = "false"
+
+# Over-the-air updates from the dashboard. Also remounts the filesystem writable
+# (CIRCUITPY goes READ-ONLY over USB) — the intended production posture. The node
+# only advertises `ota` when this is on AND adafruit_hashlib is present. Leave
+# "false" while bench-developing with drag-drop deploys.
+OTA_ENABLED = "false"
+
+# --- Networking (optional) ---------------------------------------------------
+# Leave STATIC_IP unset to use DHCP (the default). Set the block for a fixed
+# address — a static node needs no DHCP lease upkeep.
+# STATIC_IP = "192.168.1.51"
+# STATIC_SUBNET = "255.255.255.0"
+# STATIC_GATEWAY = "192.168.1.1"
+# STATIC_DNS = "192.168.1.1"

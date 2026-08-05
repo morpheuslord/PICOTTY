@@ -34,9 +34,12 @@ Use generic placeholders in examples: `node-01`, `<hub-ip>`, `<TOKEN>`.
 | `firmware/circuitpython/` | The node firmware (CircuitPython for Pico + W5100S). |
 | `firmware/scripts/` | `install-deps.sh`, `build.sh`, `deploy-zip.sh`. |
 | `firmware/tools/testhub.py` | A mock hub to test a real node in isolation. |
-| `hub/app/` | The hub: asyncio TCP server + FastAPI + SQLite + registry. |
-| `hub/static/` | The Swarm Control dashboard (buildless SPA). |
-| `hub/tools/node_sim.py` | A fake node to test the hub with no hardware. |
+| `hub/` | The `picotty` package (uv): `pyproject.toml`, `uv.lock`, `src/picotty/`. |
+| `hub/src/picotty/hub/` | The hub server: asyncio TCP + FastAPI + SQLite + registry. |
+| `hub/src/picotty/client/` | The client SDK (`HubClient` + `HubEvents`). |
+| `hub/src/picotty/static/` | The Swarm Control dashboard (buildless SPA). |
+| `hub/src/picotty/sim.py` | `picotty-sim` — a fake node to test the hub with no hardware. |
+| `telegram-bot/` | The Telegram bot sidecar (uv app; depends on `picotty[telegram]`). |
 | `target-setup/` | Scripts that run on a managed target machine. |
 
 See the top-level [README](README.md) for the architecture and diagrams.
@@ -49,11 +52,10 @@ You do **not** need hardware to develop most of this.
 
 ```bash
 cd hub
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-python -m app.main                                   # serves :8080, listens :9000
+uv sync --extra hub
+uv run --extra hub picotty-hub                       # serves :8080, listens :9000
 # in another shell, simulate nodes (grab the token the hub printed):
-python -m tools.node_sim --id node-01 --token <TOKEN>
+uv run picotty-sim --id node-01 --token <TOKEN>
 ```
 
 Open `http://localhost:8080` and you should see the simulated node, drive it, and

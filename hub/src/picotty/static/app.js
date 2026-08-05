@@ -1105,7 +1105,69 @@
         h("div", { style: "min-width:0" }, h("div", { style: "display:flex;align-items:center;gap:8px" }, h("h4", { style: "margin:0" }, "Settings"), helpLink("settings", "Settings")),
           h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "hub configuration — live values apply immediately; port changes need a restart")),
         h("button", { class: "btn btn-primary", style: "margin-left:auto;flex:none", title: "Write the changed settings to the hub (PATCH /api/settings)", onClick: () => saveSettings(edited) }, "Save config")),
-      grid, toggleWrap, alertsBlock);
+      grid, toggleWrap, alertsBlock, buildTelegramCard());
+  }
+
+  // Telegram sidecar credential form. Writes the sidecar's .env via the hub
+  // (POST /api/telegram) — the token/secret are write-only and never read back.
+  function buildTelegramCard() {
+    const tg = { bot_token: "", chat_ids: "", shell_enabled: false, totp_secret: "", arm_window_s: 3600, hub_base_url: "" };
+    const statusEl = h("span", { style: "font-size:12px;color:var(--color-neutral-700)" }, "checking…");
+    const uriEl = h("div", { style: "font-size:11px;color:var(--color-neutral-600);word-break:break-all;margin-top:4px" });
+    const field = (label, node, hint) => h("div", { class: "field", style: "margin-bottom:var(--space-3)" },
+      h("label", {}, label), node,
+      hint ? h("span", { style: "display:block;font-size:11px;color:var(--color-neutral-600);margin-top:2px" }, hint) : null);
+    const tokenInput = h("input", { class: "input", type: "password", autocomplete: "new-password", placeholder: "paste to set · blank keeps existing", onInput: (e) => { tg.bot_token = e.target.value; } });
+    const chatInput = h("input", { class: "input", type: "text", placeholder: "e.g. 123456789, -1001234567890", onInput: (e) => { tg.chat_ids = e.target.value; } });
+    const totpInput = h("input", { class: "input", type: "password", autocomplete: "new-password", placeholder: "paste or Generate", style: "flex:1;min-width:0", onInput: (e) => { tg.totp_secret = e.target.value; } });
+    const armInput = h("input", { class: "input", type: "number", value: "3600", onInput: (e) => { tg.arm_window_s = Number(e.target.value) || 3600; } });
+    const hubInput = h("input", { class: "input", type: "text", placeholder: "http://127.0.0.1:8080 (default)", onInput: (e) => { tg.hub_base_url = e.target.value; } });
+    const shellChk = h("input", { type: "checkbox", style: "accent-color:var(--color-accent);margin-top:3px;flex:none", onChange: (e) => { tg.shell_enabled = e.target.checked; } });
+    const genBtn = h("button", { class: "btn", type: "button", style: "flex:none", title: "Generate a fresh TOTP secret (POST /api/telegram/totp)", onClick: async () => {
+      const r = await apiSoft("POST", "/telegram/totp", {});
+      if (r && r.ok) { tg.totp_secret = r.secret; totpInput.value = r.secret; uriEl.textContent = "otpauth: " + r.uri; toast("TOTP generated", "Add it to your authenticator app, then Save"); }
+      else toast("Failed", "Could not generate a secret");
+    } }, "Generate");
+    const saveBtn = h("button", { class: "btn btn-primary", style: "flex:none", title: "Validate the token (getMe) and write the sidecar .env (POST /api/telegram)", onClick: () => saveTelegram(tg, statusEl) }, "Save Telegram");
+    refreshTelegramStatus(statusEl);
+    return h("div", { style: "padding:var(--space-3) var(--space-4);border-top:1px solid var(--color-divider)" },
+      h("div", { style: "display:flex;align-items:center;gap:6px;margin-bottom:var(--space-2)" },
+        h("span", { style: "font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-600)" }, "Telegram sidecar"),
+        helpLink("telegram", "Telegram bot"),
+        h("span", { style: "margin-left:auto" }, statusEl)),
+      field("Bot token", tokenInput, "From @BotFather. Write-only — never shown back."),
+      field("Allowed chat IDs", chatInput, "Comma-separated numeric ids. Every message is checked against this list."),
+      h("label", { style: "display:flex;gap:12px;align-items:flex-start;padding:var(--space-2) 0;cursor:pointer" }, shellChk,
+        h("span", { style: "min-width:0" },
+          h("span", { style: "display:block;font-size:14px;font-weight:600" }, "Enable shell tier (break-glass)"),
+          h("span", { style: "display:block;font-size:12px;color:var(--color-neutral-700)" }, "Lets /shell, /reboot, /sysrq run after /arm with a TOTP. Needs a secret below."))),
+      field("TOTP secret", h("div", { style: "display:flex;gap:8px" }, totpInput, genBtn), null), uriEl,
+      field("Arm window (seconds)", armInput, "How long a good /arm keeps the shell usable before auto-disarm."),
+      field("Hub base URL", hubInput, "Where the sidecar reaches this hub. Defaults to loopback:8080."),
+      h("div", { style: "display:flex;margin-top:var(--space-2)" }, saveBtn));
+  }
+
+  async function refreshTelegramStatus(el) {
+    if (state.demo) { el.textContent = "demo mode"; return; }
+    try {
+      const r = await getJSON("/telegram"); const t = r.telegram || {};
+      if (!t.configured) { el.textContent = t.writable ? "not configured" : "not configured · .env not writable"; return; }
+      const who = t.bot_username ? ("@" + t.bot_username) : (t.valid === false ? "token invalid" : "token set");
+      el.textContent = who + " · " + (t.chat_count || 0) + " chat(s) · shell " + (t.shell_enabled ? "on" : "off");
+    } catch (e) { el.textContent = "status unavailable"; }
+  }
+
+  async function saveTelegram(tg, statusEl) {
+    if (state.demo) { toast("Demo mode", "Telegram setup is disabled in demo"); return; }
+    const body = { shell_enabled: !!tg.shell_enabled };
+    if (tg.bot_token) body.bot_token = tg.bot_token;
+    if (tg.chat_ids) body.chat_ids = tg.chat_ids;
+    if (tg.totp_secret) body.totp_secret = tg.totp_secret;
+    if (tg.arm_window_s) body.arm_window_s = tg.arm_window_s;
+    if (tg.hub_base_url) body.hub_base_url = tg.hub_base_url;
+    const r = await apiSoft("POST", "/telegram", body);
+    if (r && r.ok) { toast("Telegram saved", "@" + r.bot_username + " · wrote " + r.env_path); refreshTelegramStatus(statusEl); }
+    else toast("Save failed", (r && (r.detail || r.error)) || "check the token and chat ids");
   }
 
   async function saveSettings(edited) {

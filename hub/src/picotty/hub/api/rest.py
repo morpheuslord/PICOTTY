@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .. import __version__, config
+from .. import telegram_setup as tg
 from ..core import Hub
 from ..protocol import validate_send
 from ..utils import gen_token, hash_token, now_ms, verify_password
@@ -20,7 +21,7 @@ from .models import (
     BulkCmd, ChordCreate, ChordPatch, CmdBody, ExpectBody, KeysBody, LoginBody,
     MacroCreate, MacroPatch, MacroRun, NodePatch, OTABundleCreate, OTABundleZip,
     OTAPush, OTARollout, QueueBody, RunbookCreate, RunbookPatch, RunbookRun,
-    SequenceBody, SysrqBody, SettingsPatch,
+    SequenceBody, SysrqBody, SettingsPatch, TelegramConfig,
 )
 
 router = APIRouter()
@@ -683,6 +684,83 @@ async def patch_settings(request: Request, body: SettingsPatch):
         await hub.bridge.reconcile()
     await hub.audit("settings", None, "updated: %s" % ", ".join(values.keys()))
     return {"ok": True, "settings": await hub.db.get_settings()}
+
+
+# -- telegram sidecar setup ---------------------------------------------------
+
+@router.get("/telegram")
+async def telegram_status(request: Request):
+    hub = hub_of(request)
+    path = config.PROCESS.telegram_env_path
+    st = tg.status(path)
+    # Resolve the bot username for display if a token is stored — best-effort,
+    # and the token itself is never returned.
+    if st["token_present"]:
+        env = tg.parse_env_file(path)
+        ok, uname = await tg.validate_token(env.get("TELEGRAM_BOT_TOKEN", ""))
+        st["valid"] = ok
+        st["bot_username"] = uname if ok else None
+    return {"ok": True, "telegram": st}
+
+
+@router.post("/telegram/totp")
+async def telegram_totp(request: Request):
+    """Generate a fresh base32 TOTP secret + otpauth URI for the shell tier. The
+    operator adds the secret to an authenticator app, then saves it below."""
+    secret = tg.gen_totp_secret()
+    return {"ok": True, "secret": secret, "uri": tg.otpauth_uri(secret)}
+
+
+@router.post("/telegram")
+async def telegram_save(request: Request, body: TelegramConfig):
+    hub = hub_of(request)
+    path = config.PROCESS.telegram_env_path
+    env = tg.parse_env_file(path)  # merge onto the existing .env
+
+    token = (body.bot_token or env.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return err("bad_request", "a bot token is required")
+    ok, uname = await tg.validate_token(token)
+    if not ok:
+        await hub.audit("settings", None, "telegram token validation failed")
+        # uname here is a static reason from validate_token, not an exception.
+        return err("invalid_token", uname)
+
+    raw_ids = body.chat_ids if body.chat_ids is not None else env.get("TELEGRAM_ALLOWED_CHAT_IDS", "")
+    ids = [c.strip() for c in str(raw_ids).replace(" ", "").split(",") if c.strip()]
+    for c in ids:
+        if not c.lstrip("-").isdigit():
+            return err("bad_request", "chat id is not numeric: %s" % c)
+    if not ids:
+        return err("bad_request", "at least one chat id is required")
+
+    env["TELEGRAM_BOT_TOKEN"] = token
+    env["TELEGRAM_ALLOWED_CHAT_IDS"] = ",".join(ids)
+    env.setdefault("HUB_BASE_URL", "http://127.0.0.1:%d" % config.PROCESS.http_port)
+    if body.hub_base_url:
+        env["HUB_BASE_URL"] = body.hub_base_url.strip()
+    if body.alerts_enabled is not None:
+        env["ALERTS_ENABLED"] = "true" if body.alerts_enabled else "false"
+    if body.shell_enabled is not None:
+        env["SHELL_ENABLED"] = "true" if body.shell_enabled else "false"
+    if body.totp_secret:
+        env["SHELL_TOTP_SECRET"] = body.totp_secret.strip()
+    if body.arm_window_s:
+        env["SHELL_ARM_WINDOW_S"] = str(int(body.arm_window_s))
+
+    shell_on = env.get("SHELL_ENABLED", "").lower() in ("1", "true", "yes", "on")
+    if shell_on and not env.get("SHELL_TOTP_SECRET"):
+        return err("bad_request", "the shell tier requires a TOTP secret; generate one first")
+
+    try:
+        tg.write_env_file(path, env)
+    except OSError:
+        await hub.audit("settings", None, "telegram .env write failed at %s" % path)
+        return err("write_failed",
+                   "could not write the sidecar .env — check TELEGRAM_ENV_PATH and permissions")
+    await hub.audit("settings", None, "telegram sidecar configured (@%s)" % uname)
+    return {"ok": True, "bot_username": uname, "env_path": str(path),
+            "chat_count": len(ids), "shell_enabled": shell_on}
 
 
 @router.post("/settings/token/rotate")
