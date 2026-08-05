@@ -1,5 +1,5 @@
 # systemd unit for the PICOTTY Telegram sidecar. Placeholders (__USER__,
-# __BOTDIR__) are filled in by install-service.sh.
+# __BOTDIR__, __ENVFILE__) are filled in by install-service.sh.
 [Unit]
 Description=PICOTTY Telegram sidecar
 After=network-online.target swarm-hub.service
@@ -9,8 +9,10 @@ Wants=network-online.target
 Type=simple
 User=__USER__
 WorkingDirectory=__BOTDIR__
-# Credentials + config. chmod 600, owned by __USER__, never in the repo.
-EnvironmentFile=__BOTDIR__/.env
+# Credentials + config — the same file the dashboard writes. chmod 600, never in
+# the repo. TELEGRAM_ENV_FILE points the sidecar's hot-reload at it too.
+EnvironmentFile=__ENVFILE__
+Environment=TELEGRAM_ENV_FILE=__ENVFILE__
 ExecStart=__BOTDIR__/.venv/bin/python -m app
 Restart=on-failure
 RestartSec=5

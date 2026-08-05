@@ -1129,6 +1129,8 @@
       else toast("Failed", "Could not generate a secret");
     } }, "Generate");
     const saveBtn = h("button", { class: "btn btn-primary", style: "flex:none", title: "Validate the token (getMe) and write the sidecar .env (POST /api/telegram)", onClick: () => saveTelegram(tg, statusEl) }, "Save Telegram");
+    const outEl = h("pre", { style: "display:none;white-space:pre-wrap;font-size:11px;line-height:1.4;background:var(--color-neutral-100);border:1px solid var(--color-divider);border-radius:6px;padding:8px;margin-top:8px;max-height:220px;overflow:auto" });
+    const installBtn = h("button", { class: "btn", type: "button", style: "flex:none", title: "Run the sidecar installer on the hub (uv sync + shared .env), then enable its service (POST /api/telegram/install)", onClick: () => installSidecar(installBtn, outEl, statusEl) }, "Install / start sidecar");
     refreshTelegramStatus(statusEl);
     return h("div", { style: "padding:var(--space-3) var(--space-4);border-top:1px solid var(--color-divider)" },
       h("div", { style: "display:flex;align-items:center;gap:6px;margin-bottom:var(--space-2)" },
@@ -1144,17 +1146,34 @@
       field("TOTP secret", h("div", { style: "display:flex;gap:8px" }, totpInput, genBtn), null), uriEl,
       field("Arm window (seconds)", armInput, "How long a good /arm keeps the shell usable before auto-disarm."),
       field("Hub base URL", hubInput, "Where the sidecar reaches this hub. Defaults to loopback:8080."),
-      h("div", { style: "display:flex;margin-top:var(--space-2)" }, saveBtn));
+      h("div", { style: "display:flex;gap:8px;flex-wrap:wrap;margin-top:var(--space-2)" }, saveBtn, installBtn),
+      outEl);
   }
 
   async function refreshTelegramStatus(el) {
     if (state.demo) { el.textContent = "demo mode"; return; }
     try {
       const r = await getJSON("/telegram"); const t = r.telegram || {};
-      if (!t.configured) { el.textContent = t.writable ? "not configured" : "not configured · .env not writable"; return; }
+      const svc = " · sidecar " + (t.service_active ? "running" : "stopped");
+      if (!t.configured) { el.textContent = (t.writable ? "not configured" : "not configured · .env not writable") + svc; return; }
       const who = t.bot_username ? ("@" + t.bot_username) : (t.valid === false ? "token invalid" : "token set");
-      el.textContent = who + " · " + (t.chat_count || 0) + " chat(s) · shell " + (t.shell_enabled ? "on" : "off");
+      el.textContent = who + " · " + (t.chat_count || 0) + " chat(s) · shell " + (t.shell_enabled ? "on" : "off") + svc;
     } catch (e) { el.textContent = "status unavailable"; }
+  }
+
+  async function installSidecar(btn, outEl, statusEl) {
+    if (state.demo) { toast("Demo mode", "Install is disabled in demo"); return; }
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "Installing…";
+    outEl.style.display = "block";
+    outEl.textContent = "Running the sidecar installer on the hub — uv sync can take a minute on a Pi Zero…";
+    const r = await apiSoft("POST", "/telegram/install", {});
+    btn.disabled = false; btn.textContent = orig;
+    outEl.textContent = (r && typeof r.output === "string" && r.output)
+      ? r.output : "No output — the hub could not run the installer (check TELEGRAM_BOT_DIR).";
+    if (r && r.ok) toast("Sidecar installed", r.service_active ? "Service is running" : "Installed — see output to finish");
+    else toast("Install needs a step", (r && (r.detail || r.error)) || "see the output panel");
+    refreshTelegramStatus(statusEl);
   }
 
   async function saveTelegram(tg, statusEl) {

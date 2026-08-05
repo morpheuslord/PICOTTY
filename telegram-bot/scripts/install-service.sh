@@ -11,13 +11,18 @@ BOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 UNIT_SRC="$SCRIPT_DIR/swarm-telegram.service"
 UNIT_DST="/etc/systemd/system/swarm-telegram.service"
 RUN_USER="${SUDO_USER:-$USER}"
+# Resolve the run-user's home even when this script is invoked via sudo (where
+# $HOME would be root's), so the shared credentials path is correct.
+USER_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+ENV_FILE="${TELEGRAM_ENV_FILE:-$USER_HOME/.config/picotty/telegram.env}"
 
 [[ -x "$BOT_DIR/.venv/bin/python" ]] || { echo "venv missing; run scripts/install.sh first"; exit 1; }
-[[ -f "$BOT_DIR/.env" ]] || { echo ".env missing; run scripts/install.sh and fill it in first"; exit 1; }
+[[ -f "$ENV_FILE" ]] || { echo "credentials file missing at $ENV_FILE — run scripts/install.sh or configure via the dashboard first"; exit 1; }
 
-echo "==> Writing $UNIT_DST (user=$RUN_USER)"
+echo "==> Writing $UNIT_DST (user=$RUN_USER, env=$ENV_FILE)"
 sed -e "s|__USER__|$RUN_USER|g" \
     -e "s|__BOTDIR__|$BOT_DIR|g" \
+    -e "s|__ENVFILE__|$ENV_FILE|g" \
     "$UNIT_SRC" | sudo tee "$UNIT_DST" >/dev/null
 
 echo "==> Enabling + starting"

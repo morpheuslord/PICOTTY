@@ -72,6 +72,11 @@ class ProcessConfig:
     telegram_env_path: Path = _env_path(
         "TELEGRAM_ENV_PATH", Path.home() / ".config" / "picotty" / "telegram.env")
 
+    # Where the sidecar's install scripts live, for the dashboard's one-click
+    # "Install sidecar" button. Defaults to ../telegram-bot relative to the hub's
+    # working directory (the repo checkout); override for other layouts.
+    telegram_bot_dir: Path = _env_path("TELEGRAM_BOT_DIR", Path.cwd().parent / "telegram-bot")
+
     # How often the liveness sweep runs and how often batched output is flushed.
     sweep_interval_ms: int = _env_int("HUB_SWEEP_INTERVAL_MS", 3000)
     output_flush_interval_ms: int = _env_int("HUB_OUTPUT_FLUSH_INTERVAL_MS", 500)

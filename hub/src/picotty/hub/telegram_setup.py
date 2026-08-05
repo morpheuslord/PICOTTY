@@ -12,9 +12,11 @@ with the stdlib so the hub needs no ``[telegram]`` extra.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import secrets
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -111,6 +113,67 @@ def gen_totp_secret() -> str:
 def otpauth_uri(secret: str, label: str = "PICOTTY shell", issuer: str = "PICOTTY") -> str:
     from urllib.parse import quote
     return "otpauth://totp/%s?secret=%s&issuer=%s" % (quote(label), secret, quote(issuer))
+
+
+async def _run(cmd: list, cwd: str, timeout: float, env: dict) -> tuple[int, str]:
+    """Run a command, capturing combined output. Returns (returncode, text)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=cwd, env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    except FileNotFoundError as e:
+        return 127, "cannot run %s: %s" % (cmd[0], e)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return 124, "timed out after %ds" % int(timeout)
+    return proc.returncode, (out or b"").decode("utf-8", "replace")
+
+
+async def service_active(unit: str = "swarm-telegram") -> bool:
+    """True if the sidecar systemd unit is active."""
+    if not shutil.which("systemctl"):
+        return False
+    rc, _ = await _run(["systemctl", "is-active", "--quiet", unit], cwd="/", timeout=6,
+                       env=dict(os.environ))
+    return rc == 0
+
+
+async def install_sidecar(bot_dir: Path, timeout: float = 300.0) -> dict:
+    """Run the sidecar's own installer (uv sync + shared .env), then try to
+    enable the systemd service via non-interactive sudo. Best-effort: returns the
+    captured output and whether the service ended up active. Only the sidecar's
+    fixed install scripts are run — no caller-supplied input reaches the shell."""
+    bot_dir = Path(bot_dir)
+    install_sh = bot_dir / "scripts" / "install.sh"
+    service_sh = bot_dir / "scripts" / "install-service.sh"
+    if not install_sh.exists():
+        return {"ok": False, "output": "sidecar installer not found at %s\n(set TELEGRAM_BOT_DIR "
+                "to the telegram-bot directory)" % install_sh, "service_active": False}
+
+    # uv is commonly on ~/.local/bin; make sure the subprocess can find it.
+    env = dict(os.environ)
+    home = env.get("HOME", str(Path.home()))
+    env["PATH"] = "%s/.local/bin:%s/bin:%s" % (home, home, env.get("PATH", ""))
+
+    chunks: list[str] = []
+    rc, out = await _run(["bash", str(install_sh)], cwd=str(bot_dir), timeout=timeout, env=env)
+    chunks.append("$ bash scripts/install.sh   (exit %d)\n%s" % (rc, out.strip()))
+    if rc != 0:
+        return {"ok": False, "output": "\n\n".join(chunks), "service_active": await service_active()}
+
+    # Enable the service. `sudo -n` fails fast (no hang) if passwordless sudo
+    # isn't configured — in that case we report the one manual command needed.
+    rc2, out2 = await _run(["sudo", "-n", "bash", str(service_sh)], cwd=str(bot_dir),
+                           timeout=90, env=env)
+    chunks.append("$ sudo -n bash scripts/install-service.sh   (exit %d)\n%s" % (rc2, out2.strip()))
+    if rc2 != 0:
+        chunks.append("The service step needs sudo. Run once on the hub:\n  "
+                      "sudo bash %s" % service_sh)
+
+    active = await service_active()
+    return {"ok": rc2 == 0 or active, "output": "\n\n".join(chunks), "service_active": active}
 
 
 def status(path: Path) -> dict:

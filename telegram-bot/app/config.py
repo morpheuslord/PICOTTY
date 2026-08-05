@@ -90,11 +90,13 @@ class Config:
     audit_log_path: Path = field(default_factory=lambda: BASE_DIR / "data" / "telegram-audit.jsonl")
 
     # -- Hot reload -----------------------------------------------------------
-    # The .env this sidecar was configured from. The hub's Telegram settings page
-    # writes this same file; the sidecar watches it and hot-reloads the allowlist,
-    # TOTP secret, and shell/alert settings on change (a token change still needs
-    # a restart, and is logged as such).
-    env_file: Path = field(default_factory=lambda: BASE_DIR / ".env")
+    # The credentials file this sidecar was configured from — the SAME file the
+    # hub's Telegram settings page writes (default ~/.config/picotty/telegram.env).
+    # The sidecar watches it and hot-reloads the allowlist, TOTP secret, and
+    # shell/alert settings on change (a token change still needs a restart, and is
+    # logged as such).
+    env_file: Path = field(
+        default_factory=lambda: Path.home() / ".config" / "picotty" / "telegram.env")
 
     @property
     def ws_url(self) -> str:
@@ -146,7 +148,8 @@ def load() -> Config:
         output_max_chunk=_int("OUTPUT_MAX_CHUNK", 3500),
         output_summarize_bytes=_int("OUTPUT_SUMMARIZE_BYTES", 24_000),
         audit_log_path=Path(audit_path).expanduser() if audit_path else BASE_DIR / "data" / "telegram-audit.jsonl",
-        env_file=Path(_str("TELEGRAM_ENV_FILE")).expanduser() if _str("TELEGRAM_ENV_FILE") else BASE_DIR / ".env",
+        env_file=Path(_str("TELEGRAM_ENV_FILE")).expanduser() if _str("TELEGRAM_ENV_FILE")
+        else Path.home() / ".config" / "picotty" / "telegram.env",
     )
     return cfg
 

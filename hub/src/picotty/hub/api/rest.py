@@ -700,7 +700,20 @@ async def telegram_status(request: Request):
         ok, uname = await tg.validate_token(env.get("TELEGRAM_BOT_TOKEN", ""))
         st["valid"] = ok
         st["bot_username"] = uname if ok else None
+    st["service_active"] = await tg.service_active()
     return {"ok": True, "telegram": st}
+
+
+@router.post("/telegram/install")
+async def telegram_install(request: Request):
+    """One-click: run the sidecar's own installer (uv sync + shared .env) and try
+    to enable its systemd service. Returns the captured output for the UI."""
+    hub = hub_of(request)
+    result = await tg.install_sidecar(config.PROCESS.telegram_bot_dir)
+    await hub.audit("settings", None,
+                    "telegram sidecar install (ok=%s, active=%s)" % (result["ok"], result["service_active"]))
+    return {"ok": result["ok"], "output": result["output"],
+            "service_active": result["service_active"]}
 
 
 @router.post("/telegram/totp")
