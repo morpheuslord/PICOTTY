@@ -2,9 +2,11 @@
 
 All notable changes to PICOTTY. This project adheres to [Semantic Versioning](https://semver.org).
 
-## v1.0.1 — 2026-08-05
+## v1.0.2 — 2026-08-05
 
-First packaged release. PICOTTY is a star-topology **networked serial console with
+First packaged release. (Versions 1.0.0 and 1.0.1 were burned on PyPI by the
+file-name-reuse policy after deleted test uploads; 1.0.2 is the first published
+version.) PICOTTY is a star-topology **networked serial console with
 USB-HID keyboard injection** for a fleet of headless machines: each Raspberry Pi
 Pico node plugs into a target's USB port and becomes a keyboard **and** a serial
 console reader, and one Pi Zero 2 W hub coordinates the swarm through a single

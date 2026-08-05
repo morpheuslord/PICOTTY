@@ -108,7 +108,7 @@ wheels = [
 
 [[package]]
 name = "picotty"
-version = "1.0.1"
+version = "1.0.2"
 source = { editable = "../hub" }
 dependencies = [
     { name = "httpx" },
