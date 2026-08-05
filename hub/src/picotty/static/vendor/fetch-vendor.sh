@@ -4,7 +4,7 @@
 #
 # The hub runs on an isolated VLAN with no internet, so we do NOT fetch these at
 # runtime and we do NOT commit them to the repo. Run this ONCE on a networked
-# machine, then copy the whole hub/static/vendor/ directory onto the hub.
+# machine, then copy the whole hub/src/picotty/static/vendor/ directory onto the hub.
 #
 # app.js feature-detects window.Terminal / window.AsciinemaPlayer; if these files
 # are absent the UI silently falls back to the built-in DOM log renderer and a
@@ -17,7 +17,7 @@
 #   @xterm/addon-fit      0.8.0   (a.k.a. xterm-addon-fit)
 #   asciinema-player      3.8.0
 #
-# Usage:  cd hub/static/vendor && sh fetch-vendor.sh
+# Usage:  cd hub/src/picotty/static/vendor && sh fetch-vendor.sh
 set -eu
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -47,5 +47,5 @@ fetch "https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema
 echo "Done. Files in $DIR:"
 ls -1 "$DIR"
 echo
-echo "Now copy hub/static/vendor/ onto the hub. index.html already references"
+echo "Now copy hub/src/picotty/static/vendor/ onto the hub. index.html already references"
 echo "these filenames; no further wiring is needed."

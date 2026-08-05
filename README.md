@@ -88,9 +88,13 @@ methods (serial `reboot`, Ctrl+Alt+Del, Magic SysRq `Alt+SysRq+B`), **custom
 quick chords** you save and replay, an offline command queue, **asciicast**
 session replay, a raw **serial bridge** for `minicom`/PuTTY, webhook/**ntfy**
 alerting, per-node keyboard layouts, and **OTA firmware updates** (chunked,
-checksummed, **.zip-upload** bundles, canary rollout with watchdog-revert). Depth in
+checksummed, **.zip-upload** bundles, canary rollout with watchdog-revert). The hub
+now ships as the **`picotty`** uv package (`uv tool install picotty`, with a
+`picotty.client` SDK), and an optional **Telegram bot sidecar** puts stats, alerts,
+and a break-glass terminal on your phone. Depth in
 **[docs/automation.md](docs/automation.md)**, **[docs/operations.md](docs/operations.md)**,
-and **[docs/ota.md](docs/ota.md)**.
+**[docs/ota.md](docs/ota.md)**, **[docs/packaging.md](docs/packaging.md)**, and
+**[docs/telegram.md](docs/telegram.md)**.
 
 ---
 
@@ -130,11 +134,16 @@ Files in [`Enclosure Cad/`](Enclosure%20Cad):
 
 ## Quick start
 
+The hub ships as the **`picotty`** package (uv). Install it as a tool, or run
+from source:
+
 ```bash
-# 1. Hub — on the Pi Zero 2 W (adopts the token from private/hub-token.txt)
-bash hub/scripts/install.sh
+# 1. Hub — on the Pi Zero 2 W
+uv tool install picotty        # picotty-hub + picotty-sim on PATH  (or: from source ↓)
+picotty-hub                    # → dashboard at http://<hub-ip>:8080
+#    from a repo checkout instead:
+bash hub/scripts/install.sh    # uv sync --extra hub  (+ fetches the terminal libs)
 bash hub/scripts/install-service.sh          # or: bash hub/scripts/run.sh  (foreground)
-#    → dashboard at  http://<hub-ip>:8080
 
 # 2. Node — on your flashing machine (<id> = a node id under private/nodes/)
 bash firmware/scripts/install-deps.sh
@@ -149,10 +158,10 @@ sudo bash target-setup/proxmox-serial.sh
 **Test without hardware:**
 
 ```bash
-python3 hub/tools/node_sim.py --id <id> --token <TOKEN>   # a fake node against the hub
+uv run picotty-sim --id <id> --token <TOKEN>              # a fake node against the hub
 python3 firmware/tools/testhub.py --selftest              # a mock hub against a real node
 python3 firmware/tools/testhub.py --framecheck            # offline firmware framing checks
-hub/.venv/bin/python hub/tests/test_db.py                 # offline hub db checks
+cd hub && uv run python tests/test_db.py                  # offline hub db checks
 ```
 
 Your node ids, hub address, and token live only under `private/` (gitignored) —
@@ -173,6 +182,8 @@ The full technical reference lives in **[docs/](docs/)**:
 | [operations.md](docs/operations.md) | Observability, prompt-state badges, HID vs Serial input, console renderer, session recording, serial bridge, alerting |
 | [automation.md](docs/automation.md) | Prompt-state detection, the expect (wait-for-output) engine, offline command queue, YAML runbooks |
 | [ota.md](docs/ota.md) | Over-the-wire firmware updates: the safety model and rollout posture |
+| [packaging.md](docs/packaging.md) | The `picotty` uv package: import surfaces, extras, entry points, the client SDK, and building + publishing to PyPI |
+| [telegram.md](docs/telegram.md) | The Telegram bot sidecar: stats / alerts / gated terminal over chat, and the dashboard credential setup |
 | [considerations.md](docs/considerations.md) | Security boundary, target requirements, power, roadmap |
 
 ---

@@ -1,0 +1,26 @@
+# systemd unit for the PICOTTY Telegram sidecar. Placeholders (__USER__,
+# __BOTDIR__) are filled in by install-service.sh.
+[Unit]
+Description=PICOTTY Telegram sidecar
+After=network-online.target swarm-hub.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__BOTDIR__
+# Credentials + config. chmod 600, owned by __USER__, never in the repo.
+EnvironmentFile=__BOTDIR__/.env
+ExecStart=__BOTDIR__/.venv/bin/python -m app
+Restart=on-failure
+RestartSec=5
+
+# Hardening — the sidecar needs only outbound network + its own dir.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=__BOTDIR__/data
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

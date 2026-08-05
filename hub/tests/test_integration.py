@@ -25,7 +25,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 HUB_DIR = HERE.parent
-sys.path.insert(0, str(HUB_DIR))
+sys.path.insert(0, str(HUB_DIR))         # for `tests.driver`
+sys.path.insert(0, str(HUB_DIR / "src"))  # for `picotty` from the src/ layout
 
 from tests.driver import DriverNode  # noqa: E402
 
@@ -449,6 +450,7 @@ async def checks():
 def main():
     tmp = tempfile.mkdtemp()
     env = dict(os.environ)
+    src = str(HUB_DIR / "src")
     env.update({
         "HUB_DB_PATH": os.path.join(tmp, "hub.db"),
         "HUB_HTTP_PORT": str(HTTP_PORT),
@@ -456,9 +458,12 @@ def main():
         "HUB_HTTP_HOST": "127.0.0.1",
         "HUB_TCP_HOST": "127.0.0.1",
         "SWARM_NODE_TOKEN": TOKEN,
+        # Ensure the uvicorn subprocess can import picotty from the src/ layout
+        # even when the package isn't installed into this interpreter.
+        "PYTHONPATH": src + os.pathsep + env.get("PYTHONPATH", ""),
     })
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app.main:app",
+        [sys.executable, "-m", "uvicorn", "picotty.hub.main:app",
          "--host", "127.0.0.1", "--port", str(HTTP_PORT), "--log-level", "warning"],
         cwd=str(HUB_DIR), env=env,
     )

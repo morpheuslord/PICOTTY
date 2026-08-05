@@ -5,13 +5,20 @@ Dev-Docs/
 
 # Optional populated offline-demo data for the dashboard (has real node names).
 # The committed UI ships only a generic placeholder demo.
-hub/static/demo.json
+hub/src/picotty/static/demo.json
 
-# Hub runtime data (the SQLite database and WAL sidecars)
+# Hub runtime data (the SQLite database and WAL sidecars). Runtime state now
+# lives outside the source tree (~/.local/share/picotty or a systemd
+# StateDirectory); this rule stays for legacy in-tree runs.
 hub/data/
 *.db
 *.db-wal
 *.db-shm
+
+# Python build artifacts (uv build / wheels / sdists)
+dist/
+build/
+.python-version.local
 
 # Staged firmware build artifacts (contain the node's real settings.toml)
 firmware/build/
@@ -32,7 +39,7 @@ Thumbs.db
 *.swp
 
 
-# Downloaded front-end libs (fetched by hub/static/vendor/fetch-vendor.sh; copy
-# the directory to the hub manually — do not commit the third-party bundles).
-hub/static/vendor/*.js
-hub/static/vendor/*.css
+# Downloaded front-end libs (fetched by the vendor fetch-vendor.sh; bundled into
+# the wheel at build time — do not commit the third-party bundles).
+hub/src/picotty/static/vendor/*.js
+hub/src/picotty/static/vendor/*.css

@@ -1,0 +1,73 @@
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "picotty"
+version = "1.0.0"
+description = "Networked serial console + USB HID keyboard injection for a fleet of headless machines — hub server, client SDK, and wire protocol."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+authors = [{ name = "morpheuslord", email = "chiranjeevi.naidu@proton.me" }]
+maintainers = [{ name = "morpheuslord", email = "chiranjeevi.naidu@proton.me" }]
+keywords = ["serial", "console", "kvm", "homelab", "raspberry-pi", "pico",
+            "circuitpython", "hid", "keyboard", "out-of-band", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Systems Administration",
+]
+
+# Base install is the lean CLIENT: enough to talk to a running hub (SDK, scripts,
+# the Telegram sidecar, CI). The server pulls its heavier stack via the [hub]
+# extra so a client — or a Pi Zero 2 W running only the sidecar — stays small.
+dependencies = [
+    "httpx>=0.27",
+    "websockets>=12",
+]
+
+[project.optional-dependencies]
+hub = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "aiosqlite>=0.19",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+]
+telegram = [
+    "python-telegram-bot[rate-limiter]>=21,<22",
+    "pyotp>=2.9",
+]
+
+[project.scripts]
+picotty-hub = "picotty.hub.main:main"
+picotty-sim = "picotty.sim:main"
+
+[project.urls]
+Homepage = "https://github.com/morpheuslord/PICOTTY"
+Repository = "https://github.com/morpheuslord/PICOTTY"
+Documentation = "https://github.com/morpheuslord/PICOTTY/tree/main/docs"
+Issues = "https://github.com/morpheuslord/PICOTTY/issues"
+
+# Dev tooling lives in a uv dependency group, NOT an extra, so it never leaks
+# into user installs. `uv sync` installs it; `uv sync --no-dev` omits it.
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+]
+
+[tool.uv.build-backend]
+# src/ layout: the package is src/picotty. (module-name/module-root shown
+# explicitly even though these are the backend defaults, so the intent is clear.)
+module-name = "picotty"
+module-root = "src"

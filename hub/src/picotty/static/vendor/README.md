@@ -1,4 +1,4 @@
-# hub/static/vendor — optional vendored front-end libraries
+# hub/src/picotty/static/vendor — optional vendored front-end libraries
 
 These libraries are **progressive enhancements**. The dashboard works fully
 without them; when present it upgrades two surfaces:
@@ -31,12 +31,12 @@ moves on. `app.js` feature-detects the globals:
 On a machine **with** internet:
 
 ```sh
-cd hub/static/vendor
+cd hub/src/picotty/static/vendor
 sh fetch-vendor.sh
 ```
 
 That downloads the pinned files (via jsDelivr, as a download mirror only) into
-this directory. Then copy the whole `hub/static/vendor/` directory onto the hub.
+this directory. Then copy the whole `hub/src/picotty/static/vendor/` directory onto the hub.
 No other wiring is needed — the filenames are already referenced by `index.html`.
 
 Bump versions deliberately in `fetch-vendor.sh`, but keep the output **filenames**

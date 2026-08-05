@@ -86,7 +86,7 @@ render correctly instead of scrolling as garbage — which matters once Serial m
 makes the console interactive. Because the hub runs on an **isolated VLAN with no
 internet**, xterm.js is not loaded from a CDN: the operator **vendors** the assets
 locally. Download `xterm.js`, `xterm.css`, and the fit addon into
-`hub/static/vendor/` and reference them from `index.html`. The hub side needs no
+`hub/src/picotty/static/vendor/` and reference them from `index.html`. The hub side needs no
 change — output already streams as text; only the client rendering changes.
 
 Where the vendored terminal is not present, the console falls back to the original
@@ -116,7 +116,7 @@ in the window.
 
 The `.cast` file plays in any asciinema player — the standalone
 `asciinema play file.cast`, the web player, or a vendored `asciinema-player` under
-`hub/static/vendor/` (same offline-vendoring reasoning as xterm.js above) wired to
+`hub/src/picotty/static/vendor/` (same offline-vendoring reasoning as xterm.js above) wired to
 a "replay" affordance that loads a chosen time window. It is read-only over
 existing data: no schema change, no firmware change, no protocol change.
 

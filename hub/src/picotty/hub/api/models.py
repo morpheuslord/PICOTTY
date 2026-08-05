@@ -143,5 +143,17 @@ class SettingsPatch(BaseModel):
     alerts_ntfy_url: Optional[str] = None
 
 
+class TelegramConfig(BaseModel):
+    # All optional: an omitted field keeps the sidecar .env's existing value, so
+    # the UI can save chat-id changes without re-sending the (write-only) token.
+    bot_token: Optional[str] = None       # write-only; never returned by GET
+    chat_ids: Optional[str] = None        # comma-separated numeric ids
+    shell_enabled: Optional[bool] = None
+    totp_secret: Optional[str] = None     # write-only
+    arm_window_s: Optional[int] = None
+    alerts_enabled: Optional[bool] = None
+    hub_base_url: Optional[str] = None
+
+
 class LoginBody(BaseModel):
     password: str

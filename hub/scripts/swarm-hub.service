@@ -2,7 +2,7 @@
 # __TOKENFILE__) are filled in by install-service.sh. Values are quoted where the
 # path may contain spaces.
 [Unit]
-Description=Swarm controller hub
+Description=Swarm controller hub (PICOTTY)
 After=network-online.target
 Wants=network-online.target
 
@@ -16,9 +16,14 @@ Environment=HUB_HTTP_HOST=0.0.0.0
 Environment=HUB_HTTP_PORT=8080
 Environment=HUB_TCP_HOST=0.0.0.0
 Environment=HUB_TCP_PORT=9000
-Environment="HUB_DB_PATH=__HUBDIR__/data/hub.db"
-Environment="HUB_STATIC_DIR=__HUBDIR__/static"
-ExecStart="__HUBDIR__/.venv/bin/python" -m app.main
+# Runtime state in the service's own StateDirectory (/var/lib/picotty), not the
+# source tree. Static assets ship inside the package, resolved automatically.
+StateDirectory=picotty
+Environment=HUB_DB_PATH=/var/lib/picotty/hub.db
+# The picotty-hub console script from the uv-managed venv (scripts/install.sh).
+# For a repo-less deploy: `uv tool install picotty` and point this at
+# %h/.local/bin/picotty-hub instead.
+ExecStart="__HUBDIR__/.venv/bin/picotty-hub"
 Restart=on-failure
 RestartSec=3
 
