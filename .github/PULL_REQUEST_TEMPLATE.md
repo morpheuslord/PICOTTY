@@ -24,7 +24,7 @@ For security fixes, coordinate privately first — see SECURITY.md.
 
 - [ ] `python3 -m py_compile` on changed firmware modules
 - [ ] Firmware verified against `firmware/tools/testhub.py --selftest`
-- [ ] Hub exercised with `hub/tools/node_sim.py` + the dashboard
+- [ ] Hub exercised with `uv run picotty-sim` + the dashboard
 - [ ] Manual test on hardware (describe below)
 
 <!-- details / output -->

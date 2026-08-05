@@ -1,0 +1,6 @@
+# Never commit the sidecar's credentials, venv, audit log, or caches.
+.env
+.venv/
+data/
+__pycache__/
+*.pyc

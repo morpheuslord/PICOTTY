@@ -11,6 +11,12 @@ import asyncio
 import json
 import struct
 
+# The wire-protocol version. Advisory for now: the node may echo it in `hello`
+# and the hub can warn on a mismatch, but feature-level negotiation still runs
+# through the capability flags (hid / cdc / serial_tx / ota), which is what
+# actually gates behavior. Bump only on an incompatible framing/semantics change.
+PROTOCOL_VERSION = 1
+
 # Hard cap on a single inbound frame. A node result or output chunk is small;
 # anything enormous is a desync or a bad actor, and we drop the connection.
 MAX_FRAME_BYTES = 1 << 20  # 1 MiB

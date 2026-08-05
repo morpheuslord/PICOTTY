@@ -31,7 +31,7 @@ transport wiring and the hub side are all in place:
   `ota.finalize()` on a healthy heartbeat. `boot.py` calls `recover_if_pending()`
   early in boot; the `OTA_ENABLED` setting exists in `nodeconfig.py` /
   `settings.toml`.
-- **The hub side:** `hub/app/ota.py` provides bundle storage (under
+- **The hub side:** `hub/src/picotty/hub/ota.py` provides bundle storage (under
   `hub/data/firmware/`), the per-node chunked push, and the canary rollout, with
   REST endpoints (`GET/POST /api/ota/bundles`, `POST /api/nodes/{id}/ota`,
   `GET /api/nodes/{id}/ota/{job_id}`, `POST /api/bulk/ota`).

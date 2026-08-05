@@ -20,12 +20,14 @@ import shutil
 import sys
 import tempfile
 
-# Make `import app.db` resolve no matter what directory this is run from.
+# Make `import picotty` resolve from the src/ layout no matter the CWD. (Under
+# `uv run pytest` the package is already installed editable and this is a no-op.)
 HUB_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if HUB_DIR not in sys.path:
-    sys.path.insert(0, HUB_DIR)
+SRC_DIR = os.path.join(HUB_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
-from app.db import Database  # noqa: E402
+from picotty.hub.db import Database  # noqa: E402
 
 
 async def run_checks() -> bool:

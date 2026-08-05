@@ -57,7 +57,7 @@ graph TD
   HUBC --> APP["app/ — TCP + FastAPI + SQLite + registry"]
   HUBC --> STAT["static/ — Swarm Control dashboard"]
   HUBC --> HST["scripts/ — install, run, systemd service"]
-  HUBC --> HTL["tools/ — node_sim.py (fake node)"]
+  HUBC --> HTL["picotty-sim — fake node"]
 
   TGT --> PS["proxmox-serial.sh — target emits serial to node"]
   TGT --> PD["pico-debug.sh — debug the node itself"]

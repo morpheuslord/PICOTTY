@@ -28,7 +28,7 @@ The dashboard shows online/offline, but for a fleet you also want to know *where
 each target is sitting: at GRUB, at a login prompt, mid-boot, panicked, or booted
 to a shell. The hub computes that from the output stream — no firmware change.
 
-**How it works.** `hub/app/classifier.py` holds an ordered list of
+**How it works.** `hub/src/picotty/hub/classifier.py` holds an ordered list of
 `(state, regex)` pairs. On every output chunk, `tcp_server` appends to the node's
 tail and runs the classifier over the **freshest ~512 bytes** of it (so a stale
 prompt far above doesn't outvote fresh output). First match wins, so the list is
@@ -66,7 +66,7 @@ a regex appears in the node's serial output within a timeout. That is what turns
 PICOTTY from a keyboard into automation: "wait for `login:`, send the user, wait
 for `Password:`, send the password, wait for a shell prompt."
 
-All the waiting is hub-side (`hub/app/expect.py`); the firmware just keeps
+All the waiting is hub-side (`hub/src/picotty/hub/expect.py`); the firmware just keeps
 emitting output and running the discrete `send`/`type`/`keys` commands the job
 dispatches.
 
@@ -199,7 +199,7 @@ A macro is a single sequence on one node. A **runbook** is the fleet-scale
 version: a named, durable list of expect steps run across a whole node group, with
 per-node staggering and a live progress view. It sits directly on top of the
 expect engine — each target node gets its own `ExpectJob` driven by the runbook's
-steps (`hub/app/runbook.py`).
+steps (`hub/src/picotty/hub/runbook.py`).
 
 ### YAML schema
 

@@ -6,7 +6,8 @@ hub, sends hello, heartbeats on interval, answers commands with results, and
 emits periodic fake serial output. Run several with different --id to simulate a
 fleet.
 
-    python -m tools.node_sim --hub 127.0.0.1 --port 9000 --id node-01 --token <TOKEN>
+    uv run picotty-sim --hub 127.0.0.1 --port 9000 --id node-01 --token <TOKEN>
+    # (equivalently: python -m picotty.sim ...)
 
 The token must match the hub's current node token (printed once on first hub
 start, or rotated via POST /api/settings/token/rotate).

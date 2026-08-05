@@ -145,6 +145,7 @@
       <a class="toc" href="#serial-bridge">Raw serial bridge</a>
       <a class="toc" href="#ota">OTA firmware updates</a>
       <a class="toc" href="#alerts">Alerts</a>
+      <a class="toc" href="#telegram">Telegram bot</a>
       <a class="toc" href="#settings">Settings</a>
       <a class="toc" href="#events">Events &amp; audit</a>
       <a class="toc" href="#security">Security model</a>
@@ -197,7 +198,7 @@
           <p class="where">Where: <b>Nodes view → center pane.</b></p>
           <p>The dark pane streams the selected node's serial output live over the WebSocket. Every byte the target emits is stored verbatim on the hub; this pane only affects the <em>display</em>.</p>
           <h3>Two renderers</h3>
-          <p>If the operator has vendored <strong>xterm.js</strong> into <code>hub/static/vendor/</code>, the console is a real terminal emulator — ANSI colors, cursor moves and full-screen TUIs (installers, <code>htop</code>, <code>nano</code>) render correctly. Without it, the console falls back to an <strong>append-only log</strong>: terminal control sequences are stripped and full-screen apps scroll as plain text rather than repainting. Either way the raw bytes are kept, so a <a href="#session-recording">recording</a> or a downloaded log is complete.</p>
+          <p>If the operator has vendored <strong>xterm.js</strong> into <code>hub/src/picotty/static/vendor/</code>, the console is a real terminal emulator — ANSI colors, cursor moves and full-screen TUIs (installers, <code>htop</code>, <code>nano</code>) render correctly. Without it, the console falls back to an <strong>append-only log</strong>: terminal control sequences are stripped and full-screen apps scroll as plain text rather than repainting. Either way the raw bytes are kept, so a <a href="#session-recording">recording</a> or a downloaded log is complete.</p>
           <h3>Console toolbar</h3>
           <div class="table-wrap"><table class="doc">
             <tr><th>Control</th><th>What it does</th></tr>
@@ -549,6 +550,21 @@ steps:
             <li><strong>Never blocks the loop:</strong> each notification is its own task with a 5 s timeout and a single retry; a dead endpoint can't stall the hub.</li>
           </ul>
           <p>Keep the alert endpoints reachable from the isolated segment, or route them through the same tunnel you use for the dashboard. Use a placeholder like <code>https://&lt;your-endpoint&gt;</code> in these fields — never paste a secret you don't want stored in hub settings.</p>
+        </section>
+
+        <!-- ================= TELEGRAM ================= -->
+        <section id="telegram">
+          <h2>Telegram bot <a class="permalink" href="#telegram">#</a></h2>
+          <p class="where">Where: <b>Settings → Telegram sidecar card.</b></p>
+          <p>The Telegram <strong>sidecar</strong> is a separate process that reaches the hub only through its REST + WebSocket API and bridges it to a Telegram bot over <strong>outbound-only</strong> long polling — no inbound port, so it works from an isolated management VLAN. This card configures it; the bot itself runs from <code>telegram-bot/</code>.</p>
+          <ul>
+            <li><strong>Bot token</strong> — from <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>. On save the hub validates it with Telegram's <code>getMe</code>; it is <em>write-only</em> and never shown back.</li>
+            <li><strong>Allowed chat IDs</strong> — a comma-separated allowlist checked on <em>every</em> update; an unknown chat gets silence, not a reply. Message the bot once and read the sidecar log to find your numeric id.</li>
+            <li><strong>Shell tier (break-glass)</strong> — enables <code>/shell</code>, <code>/reboot</code> and <code>/sysrq</code> over chat, gated behind a TOTP. Use <strong>Generate</strong> to mint a base32 secret (add it to an authenticator app), then in chat <code>/arm &lt;code&gt;</code> arms the shell for the <strong>arm window</strong> before it auto-disarms. The shell needs a node advertising <code>serial_tx</code>; the getty's non-echo keeps passwords out of the chat.</li>
+            <li><strong>Alerts</strong> — the sidecar pushes node down/up, watchdog recovery, command failures, and hub restarts, with per-node debounce and <code>/mute</code>.</li>
+          </ul>
+          <p>Saving writes the sidecar's <code>.env</code> (at <code>TELEGRAM_ENV_PATH</code>, chmod 600) — the single source of truth. The sidecar reads the same file and <strong>hot-reloads</strong> the allowlist and shell/alert settings on change; a bot-token change needs a sidecar restart (it says so in the log). Full command reference: <code>telegram-bot/README.md</code> and <code>docs/telegram.md</code>.</p>
+          <p class="callout warn"><strong>Not end-to-end encrypted.</strong> Bot traffic is TLS to Telegram's servers, which can read it. Fine for stats; for the shell this is why the terminal is gated behind break-glass TOTP and the getty keeps autologin off.</p>
         </section>
 
         <!-- ================= SETTINGS ================= -->

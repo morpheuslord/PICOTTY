@@ -1,0 +1,26 @@
+[project]
+name = "picotty-telegram"
+version = "1.0.0"
+description = "Telegram bot sidecar for the PICOTTY hub — stats, push alerts, and a break-glass terminal bridge over chat."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+authors = [{ name = "morpheuslord", email = "gopalkrishna.bs1971@gmail.com" }]
+
+# One dependency: the hub SDK plus the Telegram extra (python-telegram-bot,
+# pyotp). picotty's lean base means FastAPI never enters the sidecar's venv.
+dependencies = ["picotty[telegram]>=1.0.0"]
+
+[tool.uv]
+# An application, not a distributable package: uv installs the dependencies and
+# runs the code from the working tree (`uv run python -m app`), without trying to
+# build `app/` into a wheel.
+package = false
+
+[tool.uv.sources]
+# Dev: resolve picotty from the sibling hub source tree, editable. For a real
+# deployment drop this block so `picotty` comes from PyPI.
+picotty = { path = "../hub", editable = true }
+
+[dependency-groups]
+dev = ["pytest>=8"]

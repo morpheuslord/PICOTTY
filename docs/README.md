@@ -12,4 +12,6 @@ Deep technical reference. For the gist and copy-paste commands, see the
 | [operations.md](operations.md) | Observability, prompt-state badges, HID vs Serial input, console renderer, session recording, the serial bridge, alerting |
 | [automation.md](automation.md) | Prompt-state detection, the expect (wait-for-output) engine, the offline command queue, YAML runbooks — with the REST API and worked examples |
 | [ota.md](ota.md) | Over-the-wire firmware updates: the safety model (checksum, `.bak`, watchdog-revert, finalize-when-healthy), the push flow, canary rollout, and current integration status |
+| [packaging.md](packaging.md) | The `picotty` uv package: import surfaces, extras, entry points, install (`uv tool install`), the client SDK, and building + publishing to PyPI |
+| [telegram.md](telegram.md) | The Telegram bot sidecar: tiers (stats / alerts / gated terminal), the security model, and the dashboard credential setup flow |
 | [considerations.md](considerations.md) | Security boundary, the serial-bridge boundary, target requirements, power, roadmap |

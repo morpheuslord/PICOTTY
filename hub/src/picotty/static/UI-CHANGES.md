@@ -1,8 +1,8 @@
 # Dashboard UI changes
 
-All work is confined to `hub/static/`. Additive and non-breaking: every existing
+All work is confined to `hub/src/picotty/static/`. Additive and non-breaking: every existing
 flow (HID/serial composer, macros, events, settings, DEMO mode) is unchanged.
-Verified with `node --check hub/static/app.js`.
+Verified with `node --check hub/src/picotty/static/app.js`.
 
 Files touched: `app.js`, `index.html`, `styles`/`app.css` (no CSS change needed),
 plus new `vendor/fetch-vendor.sh`, `vendor/README.md`, this file.
@@ -114,21 +114,21 @@ The xterm and asciinema libs are **not** committed and **not** fetched at runtim
 (hub is on an isolated VLAN). To enable the enhanced console + inline replay:
 
 ```sh
-cd hub/static/vendor && sh fetch-vendor.sh   # on a networked machine
-# then copy hub/static/vendor/ onto the hub
+cd hub/src/picotty/static/vendor && sh fetch-vendor.sh   # on a networked machine
+# then copy hub/src/picotty/static/vendor/ onto the hub
 ```
 
 Until then the tags 404 harmlessly and the UI falls back to the existing DOM-log
 renderer and a `.cast` download link. See `vendor/README.md`.
 
 ## Help system — in-app docs + tooltips + `?` deep-links
-Additive and non-breaking; DEMO mode still works. `node --check hub/static/app.js`
+Additive and non-breaking; DEMO mode still works. `node --check hub/src/picotty/static/app.js`
 passes and `help.html` is balanced HTML.
 
 Files touched: `app.js`, `index.html` (unchanged — help is reachable directly at
 `/help.html`), and a NEW self-contained `help.html`.
 
-### New page — `hub/static/help.html`
+### New page — `hub/src/picotty/static/help.html`
 - A single, self-contained docs page. Links `styles.css` for the shared palette
   (CSS custom properties), then an inline `<style>` for a sticky left TOC/sidebar
   + scrollable content column. Responsive (sidebar collapses under 820px). No CDN
@@ -137,7 +137,7 @@ Files touched: `app.js`, `index.html` (unchanged — help is reachable directly 
   Security section; a grouped table of contents jumps to every section.
 - One `<section id="…">` per feature, each with prose adapted from `docs/*.md`
   (operations, automation, ota, firmware, considerations) plus the real REST
-  endpoint(s) from `hub/app/api/rest.py`, gotchas and safety notes. Addresses and
+  endpoint(s) from `hub/src/picotty/hub/api/rest.py`, gotchas and safety notes. Addresses and
   secrets are placeholders (`<hub-host>`, `<password>`, `<your-endpoint>`).
 - **Stable anchor ids:** `overview`, `nodes`, `console`, `input-modes`,
   `control-bytes`, `keyboard-layout`, `ping-read-reboot`, `prompt-state`,
@@ -235,6 +235,6 @@ icon with one polished, custom-styled hover tooltip. The docs "?" now lives
   a TOC entry under "Driving a target". The machine badge's tooltip "?" points at
   it.
 
-Verified: `node --check hub/static/app.js` passes; help.html tag balance checked
+Verified: `node --check hub/src/picotty/static/app.js` passes; help.html tag balance checked
 (section/table/div/main/nav all matched); every `data-tip-help` anchor resolves to
 a real id in help.html.

@@ -1,0 +1,54 @@
+name: Publish
+
+# Build the picotty wheel + sdist and publish to PyPI on a version tag.
+#
+# PREREQUISITE — configure PyPI Trusted Publishing ONCE before the first run:
+#   PyPI (account: morpheus_lord) -> project `picotty` -> Publishing ->
+#   add a trusted publisher / pending publisher pointing at:
+#     owner/repo   : morpheuslord/PICOTTY
+#     workflow     : publish.yml
+#     environment  : (leave blank, or set `pypi` and add it under `environment:` below)
+#   With that trust registered, the OIDC token minted by `id-token: write` below
+#   authenticates the publish — no long-lived secret is stored anywhere.
+#
+# MANUAL FALLBACK (from a laptop, if OIDC is not yet configured):
+#   cd hub && bash src/picotty/static/vendor/fetch-vendor.sh && uv build
+#   UV_PUBLISH_TOKEN=pypi-... uv publish
+# Do NOT embed any token in this file.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: build + publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC token for PyPI Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.13"
+          python-version: "3.11"
+
+      # The wheel bundles the dashboard; vendored terminal libs are gitignored,
+      # so they MUST be fetched before `uv build` or the wheel ships without them.
+      - name: Fetch vendored assets
+        run: bash hub/src/picotty/static/vendor/fetch-vendor.sh
+
+      - name: Build wheel + sdist
+        working-directory: hub
+        run: uv build
+
+      # Publishes hub/dist/* over OIDC using the trusted publisher configured above.
+      # uv discovers the OIDC token automatically; no UV_PUBLISH_TOKEN in CI.
+      - name: Publish to PyPI (Trusted Publishing)
+        working-directory: hub
+        run: uv publish

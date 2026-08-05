@@ -326,14 +326,18 @@ PICOTTY/
 │   └── build/                    ← staged artifacts (gitignored)
 │
 ├── hub/                          ← the management side (Python)
-│   ├── app/                      ← main, config, protocol, registry, db, eventbus,
-│   │                               core, tcp_server, tasks, api/{rest,ws,models}
-│   ├── static/                   ← Swarm Control dashboard (index.html, app.js, styles)
+│   ├── src/picotty/              ← the picotty package (installed, console scripts)
+│   │   ├── hub/                  ← main, config, registry, db, eventbus,
+│   │   │                           core, tcp_server, tasks, api/{rest,ws,models}
+│   │   ├── client/               ← client-side helpers
+│   │   ├── protocol.py           ← wire protocol
+│   │   ├── sim.py                ← fake node to test the hub (picotty-sim)
+│   │   └── static/               ← Swarm Control dashboard (index.html, app.js, styles)
 │   ├── scripts/                  ← install.sh, run.sh, install-service.sh, swarm-hub.service
-│   ├── tools/                    ← node_sim.py  (fake node to test the hub)
 │   ├── tests/                    ← offline checks (test_db.py)
 │   ├── data/                     ← hub.db (gitignored)
-│   └── requirements.txt
+│   ├── pyproject.toml            ← project + deps (picotty-hub / picotty-sim scripts)
+│   └── uv.lock
 │
 ├── target-setup/                 ← run ON a target machine
 │   ├── proxmox-serial.sh         ← target emits its serial shell to the node

@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  hub:
+    name: hub — db + integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.13"
+          python-version: "3.11"
+
+      # Vendored terminal libs (xterm, asciinema) are gitignored; fetch best-effort.
+      # Tests don't need the assets, so a fetch miss must not fail the job.
+      - name: Fetch vendored assets
+        run: bash hub/src/picotty/static/vendor/fetch-vendor.sh || true
+
+      - name: Sync (hub extra)
+        working-directory: hub
+        run: uv sync --extra hub
+
+      - name: test_db
+        working-directory: hub
+        run: uv run python tests/test_db.py
+
+      - name: test_integration
+        working-directory: hub
+        run: uv run python tests/test_integration.py
+
+  telegram:
+    name: telegram sidecar — unit + smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.13"
+          python-version: "3.11"
+
+      - name: Sync
+        working-directory: telegram-bot
+        run: uv sync
+
+      - name: test_unit
+        working-directory: telegram-bot
+        run: uv run python tests/test_unit.py
+
+      - name: smoke
+        working-directory: telegram-bot
+        run: uv run python tests/smoke.py

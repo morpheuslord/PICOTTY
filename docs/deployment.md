@@ -79,10 +79,10 @@ with `python3`.
 | `firmware/scripts/build.sh` | flashing machine | Deploy firmware to a mounted board (`--drive`) **or** build a drop-in artifact (`--stage`); installs Adafruit libs via circup; includes a node's `settings.toml` (`--node`). Staged library version defaults to CircuitPython 10.2.1 — override with `--cp-version`. |
 | `firmware/scripts/deploy-zip.sh` | flashing machine | Extract a staged `.zip` onto a `CIRCUITPY` drive (for a machine that only has the zip). |
 | `firmware/tools/testhub.py` | any machine | Mock hub: exercise a real node's every command, interactively or `--selftest`; `--framecheck` runs offline framing unit checks. |
-| `hub/scripts/install.sh` | hub (Pi) | apt deps + venv + `pip install -r requirements.txt`. |
+| `hub/scripts/install.sh` | hub (Pi) | `uv sync --extra hub` (creates `hub/.venv`) + fetches the terminal libs. |
 | `hub/scripts/run.sh` | hub (Pi) | Run the hub in the foreground (loads `hub-token.txt`). |
 | `hub/scripts/install-service.sh` | hub (Pi) | Install + enable + start the systemd service. |
-| `hub/tools/node_sim.py` | any machine | Fake node: exercise the hub + dashboard with no hardware. |
+| `picotty-sim` (packaged simulator) | any machine | Fake node: exercise the hub + dashboard with no hardware. |
 | `hub/tests/test_db.py` | any machine | Offline SQLite checks for the hub's data layer. |
 | `private/provision.py` | anywhere | Stamp the token into node configs and seed the hub DB. |
 | `target-setup/proxmox-serial.sh` | target host | Pin the node's serial device to `/dev/ttyPICO` + run a serial login shell. |
@@ -102,7 +102,7 @@ python3 firmware/tools/testhub.py --framecheck                    # offline fram
 # --- the hub ---
 bash hub/scripts/install.sh
 bash hub/scripts/install-service.sh
-python3 hub/tools/node_sim.py --id <id> --token <TOKEN>           # test without hardware
+uv run picotty-sim --id <id> --token <TOKEN>                      # test without hardware
 hub/.venv/bin/python hub/tests/test_db.py                         # offline db checks
 
 # --- a target ---
