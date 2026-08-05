@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Least privilege: CI only needs to read the repo (checkout). No write scopes.
+permissions:
+  contents: read
+
 jobs:
   hub:
     name: hub — db + integration

@@ -32,7 +32,10 @@
       // so a value reaching here cannot inject script. Real DOM nodes (all built
       // by this same helper) are appended as-is. There is no innerHTML sink here.
       if (kid instanceof Node) {
-        e.appendChild(kid);
+        // lgtm[js/xss] — `kid` is a DOM node built only by this same h() helper
+        // (createElement + createTextNode); appendChild never parses it as HTML,
+        // so this is not an injection sink. Reviewed false positive.
+        e.appendChild(kid); // codeql[js/xss]
       } else {
         e.appendChild(document.createTextNode(String(kid)));
       }
