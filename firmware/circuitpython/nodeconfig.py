@@ -87,6 +87,21 @@ class NodeConfig:
         self.keyboard_layout = (_str("KEYBOARD_LAYOUT", "us") or "us").strip().lower()
         self.backoff_start_ms = _int("RECONNECT_BACKOFF_START_MS", 1000)
         self.backoff_max_ms = _int("RECONNECT_BACKOFF_MAX_MS", 30000)
+        # Dead-hub detection: if no frame arrives from the hub within this window,
+        # treat the link as dead and reconnect — even if our own sends still
+        # "succeed" into the local TX buffer (a half-open connection). Relies on
+        # the hub pinging us periodically (hub >= this firmware's matching hub);
+        # keep it a few ping intervals wide. Set to 0 to disable the check.
+        self.hub_timeout_ms = _int("HUB_TIMEOUT_MS", 20000)
+        # Bound how long a single send may stall on a full TX buffer before we
+        # call the link dead. Keeps a wedged socket from spinning until the
+        # watchdog resets the whole node; stays under the watchdog timeout.
+        self.send_max_wait_ms = _int("SEND_MAX_WAIT_MS", 2000)
+        # After this many back-to-back failed connect attempts (never reached the
+        # hub), re-initialize the interface to re-acquire DHCP. Recovers a node
+        # that powered up before its DHCP server (e.g. after a site power cut) or
+        # whose lease went invalid. 0 disables the re-acquire.
+        self.rebind_after_failures = _int("REBIND_AFTER_FAILURES", 5)
         # Bound the connect() call so a down hub can't hang the loop (or, with the
         # watchdog armed, trigger a resetting reconnect storm). Keep it under the
         # watchdog timeout.

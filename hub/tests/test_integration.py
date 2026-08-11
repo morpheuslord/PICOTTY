@@ -110,6 +110,26 @@ async def checks():
     record("target unknown when node offline", get_node("drv-host").get("target") == "unknown",
            "target=%s" % get_node("drv-host").get("target"))
 
+    # --- Reconnection: the stale sweep must TEAR DOWN the socket ----------
+    # Regression guard. A node the liveness sweep flips offline (silent but its
+    # socket still open) must have that socket CLOSED, so it is forced to
+    # reconnect. Before the fix the socket lingered: the read loop kept absorbing
+    # the node's frames onto a detached state, so a node that still had network
+    # and was actively sending showed offline forever until the hub restarted.
+    http("PATCH", "/settings", {"stale_timeout_ms": 500})
+    sn = DriverNode("127.0.0.1", TCP_PORT, "drv-stale", TOKEN)
+    await sn.connect()
+    await wait_for(lambda: get_node("drv-stale").get("status") == "online")
+    # Go quiet (send nothing). The sweep must flip it offline once stale...
+    off = await wait_for(lambda: get_node("drv-stale").get("status") == "offline", timeout=8)
+    record("reconnect stale-offline", get_node("drv-stale").get("status") == "offline",
+           "status=%s" % get_node("drv-stale").get("status"))
+    # ...and close our socket. The reader pump ends on EOF only if it did.
+    await wait_for(lambda: sn._pump.done(), timeout=4)
+    record("reconnect socket-closed-on-sweep", sn._pump.done())
+    await sn.close()
+    http("PATCH", "/settings", {"stale_timeout_ms": 15000})
+
     # --- Phase 5: expect engine ------------------------------------------
     n = DriverNode("127.0.0.1", TCP_PORT, "drv-exp", TOKEN)
     await n.connect()

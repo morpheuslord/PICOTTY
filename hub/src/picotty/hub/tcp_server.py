@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 
 from . import classifier
 from .core import Hub
@@ -20,6 +21,31 @@ from .utils import now_ms, token_matches
 
 async def _node_token_hash(hub: Hub) -> str:
     return await hub.db.get_setting_raw("node_token_hash") or ""
+
+
+def _enable_keepalive(writer: asyncio.StreamWriter) -> None:
+    """Turn on TCP keepalive for an accepted node socket.
+
+    A kernel-level backstop for a dead peer that never sent a FIN (node yanked,
+    upstream switch reboot). Without it, a half-open connection is only caught by
+    the application liveness sweep; with it, the OS eventually resets the socket
+    and the read loop errors out on its own. Keepalive tunables are best-effort:
+    the three per-socket knobs are Linux-only and simply skipped elsewhere."""
+    sock = writer.get_extra_info("socket")
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError:
+        return
+    # Start probing after 10s idle, every 5s, drop after 3 failures (~25s).
+    for opt, val in (("TCP_KEEPIDLE", 10), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 3)):
+        num = getattr(socket, opt, None)
+        if num is not None:
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, num, val)
+            except OSError:
+                pass
 
 
 async def handle_message(hub: Hub, state: NodeState, msg: dict) -> None:
@@ -118,6 +144,7 @@ async def handle_message(hub: Hub, state: NodeState, msg: dict) -> None:
 def make_handler(hub: Hub):
     async def handle_connection(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         addr = writer.get_extra_info("peername")
+        _enable_keepalive(writer)
         node_id = None
         state = None
         try:

@@ -114,6 +114,16 @@ class Hub:
             return  # a newer connection owns this id now
         state.status = "offline"
         self.registry.remove(node_id)
+        # Tear the socket down. Without this a node marked offline by the liveness
+        # sweep (a stale but still-OPEN half-open connection) would linger: the
+        # read loop keeps absorbing its frames onto this now-detached state, so the
+        # node never re-registers and shows offline forever while it is happily
+        # still sending. Closing forces the node to see peer-closed and reconnect
+        # with a fresh hello. Idempotent with the handler's own finally-close.
+        try:
+            state.writer.close()
+        except Exception:
+            pass
         await self.db.touch_node(node_id, now_ms())
         # Fail any awaiting OTA request futures so a push in flight ends promptly
         # instead of waiting out its timeout.

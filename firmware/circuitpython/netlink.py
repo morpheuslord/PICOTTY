@@ -112,15 +112,26 @@ class NetLink:
         if sock is None:
             raise ConnectionError("not connected")
         mv = memoryview(data)
+        stall_deadline = None
         while mv:
             try:
                 sent = sock.send(mv)
             except OSError as e:
                 raise ConnectionError("send failed: %s" % e)
             if sent <= 0:
-                # Transient full TX buffer; yield briefly and retry.
+                # Full TX buffer. Transient if the peer is draining, permanent if
+                # the peer is gone (half-open). Bound the wait so a wedged link
+                # raises and reconnects instead of spinning until the watchdog
+                # resets the node.
+                now = time.monotonic_ns()
+                if stall_deadline is None:
+                    stall_deadline = now + self._cfg.send_max_wait_ms * 1_000_000
+                elif now >= stall_deadline:
+                    raise ConnectionError(
+                        "send stalled: TX buffer full > %dms" % self._cfg.send_max_wait_ms)
                 time.sleep(0.001)
                 continue
+            stall_deadline = None  # progress resets the stall timer
             mv = mv[sent:]
 
     def recv_into(self, scratch):

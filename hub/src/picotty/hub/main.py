@@ -4,7 +4,7 @@ Startup wiring:
   - open the database, load settings, ensure a node token exists
   - build the shared Hub (registry + db + eventbus + settings)
   - start the raw TCP server on :9000 (swarm face)
-  - start background tasks (sweep, output flush, retention, stats, lag monitor)
+  - start background tasks (sweep, node ping, output flush, retention, stats, lag)
   - serve the FastAPI app on :8080 (browser face) with the built UI as static
 
 Run under ONE uvicorn worker. The single event loop is the point: a second
@@ -92,6 +92,7 @@ def build_app() -> FastAPI:
         await hub.bridge.start()  # binds per-node listeners only if enabled
         app.state.bg_tasks = [
             asyncio.create_task(bg.liveness_sweep(hub)),
+            asyncio.create_task(bg.node_pinger(hub)),
             asyncio.create_task(bg.output_flusher(hub)),
             asyncio.create_task(bg.retention_pruner(hub)),
             asyncio.create_task(bg.stats_broadcaster(hub)),
