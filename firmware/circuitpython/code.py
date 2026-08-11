@@ -408,8 +408,9 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
         # 3) Heartbeat on interval (interval may have changed via a config frame).
         if now - last_hb >= state.heartbeat_ms * 1_000_000:
             # Carry target-machine liveness (USB host present) so the hub can show
-            # whether the attached MACHINE is up, distinct from the node itself.
-            net.send(encode(messages.heartbeat(cfg.node_id, host_present())))
+            # whether the attached MACHINE is up, distinct from the node itself,
+            # plus our own uptime so the hub can spot an unannounced node reboot.
+            net.send(encode(messages.heartbeat(cfg.node_id, host_present(), mono_ms())))
             last_hb = now
             # Reaching a heartbeat means we booted, networked, connected, and ran
             # the loop — healthy enough to finalize a pending OTA update (drop the

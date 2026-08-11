@@ -57,11 +57,24 @@ async def handle_message(hub: Hub, state: NodeState, msg: dict) -> None:
         # Carry the target-machine liveness the node reported, if any.
         if "host" in msg:
             state.host_up = bool(msg.get("host"))
+        # Firmware uptime (ms since the node booted). A value that jumps BACKWARDS
+        # means the node rebooted unannounced (watchdog, power blip) while keeping
+        # or quickly regaining its link — worth surfacing so a flapping node isn't
+        # silently "online". A little slack absorbs clock granularity.
+        up = msg.get("up")
+        if isinstance(up, int) and up >= 0:
+            prev = state.node_uptime_ms
+            if prev is not None and up + 2000 < prev:
+                await hub.audit("node_down", state.node_id,
+                                "node rebooted (uptime %dms -> %dms)" % (prev, up))
+            state.node_uptime_ms = up
+            state.node_uptime_at = state.last_seen
         # Registry-only refresh (already done above); push a compact pulse that
         # includes the derived target state so browsers update the machine badge.
         hub.eventbus.broadcast(
             {"event": "heartbeat", "id": state.node_id, "ts": state.last_seen,
-             "rtt_ms": state.rtt_ms, "target": hub.target_state(state)}
+             "rtt_ms": state.rtt_ms, "target": hub.target_state(state),
+             "node_uptime_ms": state.node_uptime_ms}
         )
 
     elif mtype == "result":
@@ -177,13 +190,18 @@ def make_handler(hub: Hub):
                     pass
 
             await hub.db.upsert_node(node_id, fw, ts)
+            reconnects = hub.registry.record_connect(node_id)
             state = NodeState(
                 node_id=node_id, writer=writer, addr=addr,
                 connected_at=ts, last_seen=ts, status="online",
                 fw_version=fw, capabilities=caps, layout=layout,
+                reconnects=reconnects,
             )
             hub.registry.add(state)
-            await hub.audit("node_up", node_id, "registered fw %s caps %s" % (fw, ",".join(caps)))
+            detail = "registered fw %s caps %s" % (fw, ",".join(caps))
+            if reconnects:
+                detail += " (reconnect #%d)" % reconnects
+            await hub.audit("node_up", node_id, detail)
             node_row = await hub.db.get_node(node_id)
             hub.eventbus.broadcast({"event": "node_up", "id": node_id, "meta": hub.merge_node(node_row)})
 

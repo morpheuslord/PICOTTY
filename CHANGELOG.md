@@ -4,6 +4,19 @@ All notable changes to PICOTTY. This project adheres to [Semantic Versioning](ht
 
 ## Unreleased
 
+### Added — link telemetry & activity monitoring
+
+Precautionary observability so a degrading node is visible before it drops:
+
+- **Network telemetry.** The hub's per-node ping now feeds a rolling window that
+  yields **RTT avg/min/max, jitter** (mean variation between consecutive pings),
+  and **packet loss %**. Surfaced per node in the API and dashboard, with a
+  live `node_net` event and a colour-coded **link quality** badge (good/fair/poor).
+- **Activity / uptime.** Nodes report firmware **uptime** in the heartbeat; the
+  hub shows it and raises a `node_down` event when it jumps backwards (an
+  unannounced reboot). The hub also counts **reconnects** per node this run, so a
+  flapping link is obvious even while the node reads "online".
+
 ### Fixed — nodes falsely shown offline (stuck-offline / reconnection)
 
 A node that was alive and networked could show **offline** in the dashboard
