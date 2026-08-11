@@ -4,6 +4,11 @@ All notable changes to PICOTTY. This project adheres to [Semantic Versioning](ht
 
 ## Unreleased
 
+A reliability pass on node presence: nodes no longer get stuck showing offline
+while alive, both ends recover from a dropped link on their own, and the
+dashboard now surfaces link quality and node activity so a degrading node is
+visible before it drops.
+
 ### Added — link telemetry & activity monitoring
 
 Precautionary observability so a degrading node is visible before it drops:
