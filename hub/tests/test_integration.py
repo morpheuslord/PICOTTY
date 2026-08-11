@@ -110,6 +110,57 @@ async def checks():
     record("target unknown when node offline", get_node("drv-host").get("target") == "unknown",
            "target=%s" % get_node("drv-host").get("target"))
 
+    # --- Reconnection: the stale sweep must TEAR DOWN the socket ----------
+    # Regression guard. A node the liveness sweep flips offline (silent but its
+    # socket still open) must have that socket CLOSED, so it is forced to
+    # reconnect. Before the fix the socket lingered: the read loop kept absorbing
+    # the node's frames onto a detached state, so a node that still had network
+    # and was actively sending showed offline forever until the hub restarted.
+    http("PATCH", "/settings", {"stale_timeout_ms": 500})
+    sn = DriverNode("127.0.0.1", TCP_PORT, "drv-stale", TOKEN)
+    await sn.connect()
+    await wait_for(lambda: get_node("drv-stale").get("status") == "online")
+    # Go quiet (send nothing). The sweep must flip it offline once stale...
+    off = await wait_for(lambda: get_node("drv-stale").get("status") == "offline", timeout=8)
+    record("reconnect stale-offline", get_node("drv-stale").get("status") == "offline",
+           "status=%s" % get_node("drv-stale").get("status"))
+    # ...and close our socket. The reader pump ends on EOF only if it did.
+    await wait_for(lambda: sn._pump.done(), timeout=4)
+    record("reconnect socket-closed-on-sweep", sn._pump.done())
+    await sn.close()
+    http("PATCH", "/settings", {"stale_timeout_ms": 15000})
+
+    # --- Telemetry: link quality + activity/uptime -----------------------
+    tel = DriverNode("127.0.0.1", TCP_PORT, "drv-tel", TOKEN)
+    await tel.connect()
+    await wait_for(lambda: get_node("drv-tel").get("status") == "online")
+    # Node reports its firmware uptime; the hub surfaces it (projected to now).
+    await tel.heartbeat(host=True, up=42_000)
+    await wait_for(lambda: get_node("drv-tel").get("node_uptime_ms") is not None)
+    record("telemetry node-uptime", (get_node("drv-tel").get("node_uptime_ms") or 0) >= 42_000,
+           "up=%s" % get_node("drv-tel").get("node_uptime_ms"))
+    # A few pings (the driver auto-pongs) populate the rolling quality window.
+    # http() is blocking urllib, so run it off-loop or the driver's pump can't
+    # send its pong until after the hub-side ping has already timed out.
+    loop = asyncio.get_event_loop()
+    for _ in range(3):
+        await loop.run_in_executor(None, http, "POST", "/nodes/drv-tel/ping")
+        await asyncio.sleep(0.05)
+    tn2 = get_node("drv-tel")
+    record("telemetry rtt-avg", tn2.get("rtt_avg_ms") is not None, "avg=%s" % tn2.get("rtt_avg_ms"))
+    record("telemetry jitter+loss", tn2.get("jitter_ms") is not None and tn2.get("loss_pct") == 0,
+           "jitter=%s loss=%s" % (tn2.get("jitter_ms"), tn2.get("loss_pct")))
+    record("telemetry reconnects-zero", tn2.get("reconnects") == 0, "reconnects=%s" % tn2.get("reconnects"))
+    # Reconnect: a fresh hello for the same id bumps the reconnect counter.
+    await tel.close()
+    await wait_for(lambda: get_node("drv-tel").get("status") == "offline")
+    tel2 = DriverNode("127.0.0.1", TCP_PORT, "drv-tel", TOKEN)
+    await tel2.connect()
+    await wait_for(lambda: get_node("drv-tel").get("status") == "online")
+    record("telemetry reconnect-counted", get_node("drv-tel").get("reconnects") == 1,
+           "reconnects=%s" % get_node("drv-tel").get("reconnects"))
+    await tel2.close()
+
     # --- Phase 5: expect engine ------------------------------------------
     n = DriverNode("127.0.0.1", TCP_PORT, "drv-exp", TOKEN)
     await n.connect()

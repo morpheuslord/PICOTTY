@@ -1,6 +1,9 @@
 """Background tasks that run on the hub's single event loop.
 
-- liveness sweep: flips stale nodes offline (catches half-open connections).
+- liveness sweep: flips stale nodes offline AND closes their socket (so a
+  half-open connection is actually torn down, forcing the node to reconnect).
+- node pinger: hub->node keepalive so an idle node keeps receiving traffic and
+  a silent (dead) node is caught quickly.
 - output flush: writes batched serial output to SQLite on an interval.
 - retention: prunes output_log and events past their configured age, daily.
 - hub stats: broadcasts a periodic health pulse to browsers.
@@ -29,6 +32,28 @@ async def liveness_sweep(hub: Hub):
                     await hub.mark_offline(state, "stale: no frame within %dms" % stale_ms)
         except Exception as e:
             await hub.audit("error", None, "sweep error: %s" % e)
+
+
+async def node_pinger(hub: Hub):
+    """Ping every online node on an interval — the hub->node keepalive.
+
+    Purpose is liveness, not RTT (though it refreshes rtt_ms as a bonus): the
+    inbound ping gives an idle node the periodic traffic its own dead-hub timeout
+    needs, and the pong refreshes last_seen so a node that has gone silent is
+    swept offline (and its socket closed) promptly instead of lingering half-open.
+    Pings fan out concurrently so one slow node never delays the others."""
+    interval = config.PROCESS.node_ping_interval_ms / 1000
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            online = [s.node_id for s in hub.registry.all() if s.status == "online"]
+            if online:
+                await asyncio.gather(
+                    *(hub.ping_node(nid) for nid in online),
+                    return_exceptions=True,
+                )
+        except Exception as e:
+            await hub.audit("error", None, "node ping error: %s" % e)
 
 
 async def output_flusher(hub: Hub):

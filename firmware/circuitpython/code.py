@@ -23,7 +23,7 @@ from injector import Injector, InjectError
 from wire import FrameReader, ProtocolError, encode
 import messages
 
-FW_VERSION = "1.1.0"
+FW_VERSION = "1.2.0"
 
 # Editing files on the CIRCUITPY drive must not yank a running node into a reload
 # mid-command. We reload deliberately (on a reboot command), never by surprise.
@@ -356,6 +356,7 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
     last_hb = now
     last_lease = now
     last_gc = now
+    last_rx = now  # last time ANY frame arrived from the hub (dead-hub detector)
 
     while True:
         feed(wdt)
@@ -364,6 +365,7 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
         # 1) Inbound hub frames.
         n = net.recv_into(scratch)
         if n:
+            last_rx = time.monotonic_ns()
             reader.feed(mv[:n])
             while True:
                 try:
@@ -396,11 +398,19 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
 
         now = time.monotonic_ns()
 
+        # 2c) Dead-hub detection. If the hub has gone silent for too long, the
+        # link is dead even though our sends may still be buffering locally (a
+        # half-open socket). Force a reconnect. The hub pings us on an interval,
+        # so a healthy link refreshes last_rx well inside this window.
+        if cfg.hub_timeout_ms and (now - last_rx) >= cfg.hub_timeout_ms * 1_000_000:
+            raise ConnectionError("no frame from hub within %dms" % cfg.hub_timeout_ms)
+
         # 3) Heartbeat on interval (interval may have changed via a config frame).
         if now - last_hb >= state.heartbeat_ms * 1_000_000:
             # Carry target-machine liveness (USB host present) so the hub can show
-            # whether the attached MACHINE is up, distinct from the node itself.
-            net.send(encode(messages.heartbeat(cfg.node_id, host_present())))
+            # whether the attached MACHINE is up, distinct from the node itself,
+            # plus our own uptime so the hub can spot an unannounced node reboot.
+            net.send(encode(messages.heartbeat(cfg.node_id, host_present(), mono_ms())))
             last_hb = now
             # Reaching a heartbeat means we booted, networked, connected, and ran
             # the loop — healthy enough to finalize a pending OTA update (drop the
@@ -513,13 +523,19 @@ def main():
     backoff = cfg.backoff_start_ms
     boot_watchdog = was_watchdog_reset()
     reported_reset = False
+    # Count back-to-back attempts that never reached the hub, to trigger a network
+    # re-acquire (re-DHCP). Reset the instant a connect succeeds.
+    connect_fails = 0
 
     while True:
+        reached_hub = False
         try:
             STATUS.set("connecting")
             feed(wdt)
             print("connecting to hub", cfg.hub_host, cfg.hub_port)
             net.connect()
+            reached_hub = True  # TCP connect succeeded — the network is good
+            connect_fails = 0
             reader.reset()
             backchannel.reset_tx()  # abandon any serial writes left from a dropped link
             net.send(encode(messages.hello(cfg.node_id, cfg.token, FW_VERSION, cap, layout_name)))
@@ -534,8 +550,28 @@ def main():
             run_session(net, reader, injector, backchannel, state, cfg, wdt, ota)
         except (ConnectionError, OSError, RuntimeError, ProtocolError) as e:
             print("link down:", e)
+            # A drop AFTER a successful connect means the network is fine (the hub
+            # or link went away); only count attempts that never reached the hub.
+            if not reached_hub:
+                connect_fails += 1
         finally:
             net.close()
+
+        # Repeated failures to even reach the hub can mean our address is stale
+        # (booted before DHCP, or the lease went bad). Re-init the interface to
+        # pull a fresh lease before the next attempt.
+        if cfg.rebind_after_failures and connect_fails >= cfg.rebind_after_failures:
+            print("re-acquiring network after", connect_fails, "failed connects")
+            log_error("re-acquiring network after %d failed connects" % connect_fails)
+            STATUS.set("netdown")
+            try:
+                net.bring_up()
+            except Exception as e:
+                print("network re-acquire failed:", e)
+                log_error("network re-acquire failed: %s" % e)
+            connect_fails = 0
+            backoff = cfg.backoff_start_ms
+
         STATUS.set("connecting")
         sleep_feeding(backoff / 1000, wdt, net)
         backoff = min(backoff * 2, cfg.backoff_max_ms)

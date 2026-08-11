@@ -2,6 +2,56 @@
 
 All notable changes to PICOTTY. This project adheres to [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+A reliability pass on node presence: nodes no longer get stuck showing offline
+while alive, both ends recover from a dropped link on their own, and the
+dashboard now surfaces link quality and node activity so a degrading node is
+visible before it drops.
+
+### Added — link telemetry & activity monitoring
+
+Precautionary observability so a degrading node is visible before it drops:
+
+- **Network telemetry.** The hub's per-node ping now feeds a rolling window that
+  yields **RTT avg/min/max, jitter** (mean variation between consecutive pings),
+  and **packet loss %**. Surfaced per node in the API and dashboard, with a
+  live `node_net` event and a colour-coded **link quality** badge (good/fair/poor).
+- **Activity / uptime.** Nodes report firmware **uptime** in the heartbeat; the
+  hub shows it and raises a `node_down` event when it jumps backwards (an
+  unannounced reboot). The hub also counts **reconnects** per node this run, so a
+  flapping link is obvious even while the node reads "online".
+
+### Fixed — nodes falsely shown offline (stuck-offline / reconnection)
+
+A node that was alive and networked could show **offline** in the dashboard
+indefinitely, only recovering when the hub was restarted (no node restart
+needed). Root cause: when the hub's liveness sweep flipped a stale node offline
+it removed it from the registry **without closing the socket**, so the still-open
+connection kept delivering the node's frames onto a detached state — the node
+never re-registered. Hardened both sides of the link:
+
+- **Hub — sweep now tears down the socket.** `mark_offline` closes the node's
+  writer, forcing a reconnect instead of a lingering half-open connection.
+- **Hub — TCP keepalive** on accepted node sockets, a kernel-level backstop for a
+  peer that vanished without a FIN.
+- **Hub — node keepalive pinger** (`HUB_NODE_PING_INTERVAL_MS`, default 5s): the
+  hub→node half of the heartbeat, so an idle node keeps receiving traffic and a
+  silent node is swept promptly.
+- **Node — dead-hub detection** (`HUB_TIMEOUT_MS`, default 20s): reconnect if no
+  frame arrives from the hub within the window, catching a half-open socket where
+  the node's own sends still buffer locally.
+- **Node — bounded send** (`SEND_MAX_WAIT_MS`, default 2s): a wedged TX buffer now
+  reconnects instead of spinning until the watchdog resets the whole node.
+- **Node — DHCP re-acquire** (`REBIND_AFTER_FAILURES`, default 5): after repeated
+  connects that never reached the hub, re-init the interface to pull a fresh
+  lease — recovers a node that powered up before its DHCP server (site power cut)
+  or whose lease went bad.
+
+Node firmware bumped to **1.2.0**. The node pinger and dead-hub timeout are a
+matched pair: run the updated hub alongside 1.2.0 firmware (or set
+`HUB_TIMEOUT_MS = 0` to pair 1.2.0 nodes with an older, non-pinging hub).
+
 ## v1.0.2 — 2026-08-05
 
 First packaged release. (Versions 1.0.0 and 1.0.1 were burned on PyPI by the

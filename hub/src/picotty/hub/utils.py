@@ -13,6 +13,31 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def net_stats(window: list) -> dict:
+    """Derive link-quality metrics from a rolling window of ping RTT samples.
+
+    `window` is a list of samples in time order; each is an RTT in ms, or None
+    for a ping that got no pong (a lost probe). Returns avg/min/max over the
+    delivered samples, `jitter` (mean absolute difference between consecutive
+    delivered samples — the RFC 3550 sense of inter-probe variation), and `loss`
+    (percent of probes with no reply). All None/0 when there is nothing to report,
+    so callers can render "—" without special-casing an empty window."""
+    got = [s for s in window if s is not None]
+    total = len(window)
+    loss = round(100 * (total - len(got)) / total) if total else 0
+    if not got:
+        return {"avg": None, "min": None, "max": None, "jitter": None, "loss": loss}
+    diffs = [abs(got[i] - got[i - 1]) for i in range(1, len(got))]
+    jitter = round(sum(diffs) / len(diffs)) if diffs else 0
+    return {
+        "avg": round(sum(got) / len(got)),
+        "min": min(got),
+        "max": max(got),
+        "jitter": jitter,
+        "loss": loss,
+    }
+
+
 def gen_cmd_id() -> str:
     """A short, unique correlation id echoed by the node in results and output."""
     return "c_" + secrets.token_hex(4)

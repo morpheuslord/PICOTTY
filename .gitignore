@@ -38,6 +38,9 @@ venv/
 Thumbs.db
 *.swp
 
+# Local PR draft bodies (kept alongside the branch, pasted into the PR by hand)
+PR-*.md
+
 
 # Downloaded front-end libs (fetched by the vendor fetch-vendor.sh; bundled into
 # the wheel at build time — do not commit the third-party bundles).

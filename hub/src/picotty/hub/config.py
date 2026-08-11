@@ -79,6 +79,13 @@ class ProcessConfig:
 
     # How often the liveness sweep runs and how often batched output is flushed.
     sweep_interval_ms: int = _env_int("HUB_SWEEP_INTERVAL_MS", 3000)
+    # How often the hub pings each online node. This is the hub->node half of the
+    # keepalive: it gives an otherwise-idle node periodic inbound traffic so the
+    # node's own dead-hub timeout can tell a live hub from a dead one, and a pong
+    # refreshes last_seen so a node that stopped acking is caught by the sweep.
+    # Keep it well below the node's HUB_TIMEOUT_MS (default 20s) and the hub's
+    # stale_timeout_ms (default 15s) so a healthy link never falsely trips either.
+    node_ping_interval_ms: int = _env_int("HUB_NODE_PING_INTERVAL_MS", 5000)
     output_flush_interval_ms: int = _env_int("HUB_OUTPUT_FLUSH_INTERVAL_MS", 500)
     output_flush_max_rows: int = _env_int("HUB_OUTPUT_FLUSH_MAX_ROWS", 200)
     # Periodic hub_stats broadcast interval.

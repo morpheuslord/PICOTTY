@@ -149,6 +149,24 @@
     const up = Math.floor(ms / 1000);
     return Math.floor(up / 86400) + "d " + Math.floor((up % 86400) / 3600) + "h " + Math.floor((up % 3600) / 60) + "m";
   }
+  // Compact uptime for a node: largest sensible unit, e.g. "3d 4h", "12m", "45s".
+  function durShort(ms) {
+    if (ms == null) return "—";
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+    return Math.floor(s / 86400) + "d " + Math.floor((s % 86400) / 3600) + "h";
+  }
+  // Classify link health from jitter + loss so a flaky node is visible before it
+  // drops. Returns null when there is no telemetry yet (render nothing).
+  function netQuality(n) {
+    if (!n || n.jitterMs == null) return null;
+    const j = n.jitterMs, l = n.lossPct || 0;
+    if (l >= 10 || j >= 100) return { label: "poor", color: "#c0453b" };
+    if (l >= 2 || j >= 40) return { label: "fair", color: "#c58a2b" };
+    return { label: "good", color: "#3f9e63" };
+  }
 
   // ---- REST --------------------------------------------------------------
   async function api(method, path, body) {
@@ -277,6 +295,26 @@
     }
     return h("span", { title: c.label + " — the attached machine",
       style: "flex:none;width:9px;height:9px;border-radius:50%;background:" + c.dot + (target === "down" ? ";animation:sc-pulse 1.4s infinite" : "") });
+  }
+
+  // Link-quality badge from the node's ping telemetry (jitter + loss). A big
+  // pill in the header, a compact coloured dot in the list. Only "fair"/"poor"
+  // draw the compact dot, so a healthy fleet stays quiet; nothing renders until
+  // there is telemetry to show.
+  function netBadge(n, opts) {
+    const q = netQuality(n);
+    if (!q) return null;
+    const big = opts && opts.big;
+    const tip = "link " + q.label + " — jitter " + (n.jitterMs != null ? n.jitterMs + "ms" : "—")
+      + ", loss " + (n.lossPct != null ? n.lossPct + "%" : "—")
+      + (n.rttAvgMs != null ? ", avg rtt " + n.rttAvgMs + "ms" : "");
+    if (big) {
+      return h("span", { title: tip,
+        style: "flex:none;padding:2px 8px;font-size:11px;font-weight:600;letter-spacing:0.02em;background:" + q.color + ";color:#faf8f6" }, "link " + q.label);
+    }
+    if (q.label === "good") return null;  // keep the list uncluttered when healthy
+    return h("span", { title: tip,
+      style: "flex:none;width:9px;height:9px;border-radius:50%;background:" + q.color + ";animation:sc-pulse 1.4s infinite" });
   }
 
   // ---- serial bridge (phase 8) -------------------------------------------
@@ -590,6 +628,7 @@
           h("span", { style: "font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-neutral-700)" }, n.label),
           (on ? targetBadge(n.target) : null),
           (on ? promptBadge(n.promptState) : null),
+          (on ? netBadge(n) : null),
           h("span", { style: "margin-left:auto;font-size:11px;color:var(--color-neutral-600);flex:none" }, rel(n.lastSeen))),
         h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:4px;padding-left:17px" },
           h("span", { class: "tag tag-neutral", style: "padding:1px 7px" }, n.group || "—"),
@@ -656,11 +695,26 @@
         h("span", { style: "font-size:14px;color:var(--color-neutral-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" }, s.label || ""),
         h("span", { class: "tag " + (online ? "tag-accent" : "tag-neutral"), title: "node (Pico) link status" }, online ? "online" : "offline"),
         (online ? targetBadge(s.target, { big: true }) : null),
-        (online ? promptBadge(s.promptState, { big: true }) : null)),
+        (online ? promptBadge(s.promptState, { big: true }) : null),
+        (online ? netBadge(s, { big: true }) : null)),
       h("div", { style: "display:flex;flex-wrap:wrap;gap:2px var(--space-4);font-size:12px;color:var(--color-neutral-700);font-family:ui-monospace,Menlo,monospace;overflow:hidden" },
         h("span", {}, s.ip || ""),
         h("span", { title: "fw = the running firmware's FW_VERSION from the node's code.py — NOT the OTA bundle name. See the muted “flashed:” line for the last bundle pushed.", "data-tip-help": "ota" }, "fw " + (s.fw || "")),
-        h("span", {}, "rtt " + (online ? (s.rttMs != null ? s.rttMs + "ms" : "—") : "—")),
+        h("span", { title: "last round-trip / rolling average over recent pings" },
+          "rtt " + (online ? (s.rttMs != null ? s.rttMs + "ms" : "—") : "—")
+            + (online && s.rttAvgMs != null ? " (avg " + s.rttAvgMs + "ms)" : "")),
+        (online && s.jitterMs != null
+          ? h("span", { title: "jitter = average variation between consecutive ping round-trips; high jitter is an unstable link" }, "jitter " + s.jitterMs + "ms")
+          : null),
+        (online && s.lossPct != null
+          ? h("span", { style: (s.lossPct >= 2 ? "color:#c58a2b" : ""), title: "share of recent pings that got no reply" }, "loss " + s.lossPct + "%")
+          : null),
+        (online && s.nodeUptimeMs != null
+          ? h("span", { title: "how long the node firmware has been running since its last boot" }, "up " + durShort(s.nodeUptimeMs))
+          : null),
+        (s.reconnects
+          ? h("span", { style: (s.reconnects >= 3 ? "color:#c58a2b" : "color:var(--color-neutral-600)"), title: "times this node has reconnected since the hub started — frequent reconnects mean a flapping link" }, "reconnects " + s.reconnects)
+          : null),
         h("span", {}, "caps " + (s.caps || "")), h("span", {}, "group " + (s.group || "")),
         h("span", {}, "kbd: " + (s.layout || "us")),                     // phase 1: read-only layout
         (bridgePortFor(s.id) != null                                     // phase 8: bridge endpoint
@@ -2259,7 +2313,8 @@
       }
       case "node_down": { const n = findNode(ev.id); if (n) n.status = "offline"; if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) { renderHeaderInto(ui.header); rebuildComposerState(); } } recomputeFleet(); break; }
       case "node_updated": { const n = findNode(ev.id); if (n) { if (ev.label != null) n.label = ev.label; if (ev.group != null) n.group = ev.group; if (ev.status) n.status = ev.status; } if (state.view === "nodes") renderNodeList(); break; }
-      case "heartbeat": { const n = findNode(ev.id); if (n) { n.lastSeen = ev.ts || now(); if (ev.rtt_ms != null) n.rttMs = ev.rtt_ms; if (ev.target != null) n.target = ev.target; } if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) renderHeaderInto(ui.header); } break; }
+      case "heartbeat": { const n = findNode(ev.id); if (n) { n.lastSeen = ev.ts || now(); if (ev.rtt_ms != null) n.rttMs = ev.rtt_ms; if (ev.target != null) n.target = ev.target; if (ev.node_uptime_ms != null) n.nodeUptimeMs = ev.node_uptime_ms; } if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) renderHeaderInto(ui.header); } break; }
+      case "node_net": { const n = findNode(ev.id); if (n) { if (ev.rtt_ms != null) n.rttMs = ev.rtt_ms; n.rttAvgMs = ev.rtt_avg_ms; n.jitterMs = ev.jitter_ms; n.lossPct = ev.loss_pct; } if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId && ui.header) renderHeaderInto(ui.header); } break; }
       case "command_issued": { const n = findNode(ev.id); if (n) n.inflight = (n.inflight || 0) + 1; if (state.view === "nodes") renderNodeList(); break; }
       case "result": {
         const n = findNode(ev.id); if (n) n.inflight = Math.max(0, (n.inflight || 0) - 1);
@@ -2320,6 +2375,11 @@
     rec.lastOta = meta.last_ota != null ? meta.last_ota : (rec.lastOta || null);
     rec.lastSeen = meta.last_seen || now();
     rec.inflight = meta.inflight || 0;
+    if (meta.rtt_avg_ms !== undefined) rec.rttAvgMs = meta.rtt_avg_ms;
+    if (meta.jitter_ms !== undefined) rec.jitterMs = meta.jitter_ms;
+    if (meta.loss_pct !== undefined) rec.lossPct = meta.loss_pct;
+    if (meta.node_uptime_ms !== undefined) rec.nodeUptimeMs = meta.node_uptime_ms;
+    if (meta.reconnects !== undefined) rec.reconnects = meta.reconnects;
     return rec;
   }
   function recomputeFleet() {
@@ -2332,7 +2392,8 @@
   function apiNodeToRec(n) {
     return { id: n.id, label: n.label || "", group: n.group || "", ip: n.ip || "", fw: n.fw_version || "",
       status: n.status, rttMs: n.rtt_ms, caps: (n.capabilities || []).join(","), lastSeen: n.last_seen || now(), inflight: n.inflight || 0,
-      layout: n.layout || "us", promptState: n.prompt_state || null, target: n.target || "unknown", lastOta: n.last_ota || null };
+      layout: n.layout || "us", promptState: n.prompt_state || null, target: n.target || "unknown", lastOta: n.last_ota || null,
+      rttAvgMs: n.rtt_avg_ms, jitterMs: n.jitter_ms, lossPct: n.loss_pct, nodeUptimeMs: n.node_uptime_ms, reconnects: n.reconnects || 0 };
   }
   async function loadLive() {
     const health = await getJSON("/health");
@@ -2367,8 +2428,8 @@
     hub: { uptime_ms: 3 * 3600e3, bind: "hub.local", swarm_port: 9000, web_port: 8080, version: "demo" },
     settings: { heartbeat_interval_ms: 5000, stale_timeout_ms: 15000, output_retention_days: 30, event_retention_days: 90, require_confirm_dangerous: true },
     nodes: [
-      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.0.0", status: "online", rttMs: 3, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login", target: "up", lastOta: "fw-1.1.0 @ 1699900000000" },
-      { id: "node-02", label: "example target two", group: "group-a", ip: "10.0.0.12", fw: "1.0.0", status: "online", rttMs: 5, ageMs: 4000, caps: "hid,cdc,serial_tx,ota", layout: "de", promptState: "shell", target: "down" },
+      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.2.0", status: "online", rttMs: 3, rttAvgMs: 3, jitterMs: 1, lossPct: 0, nodeUptimeMs: 5 * 86400e3, reconnects: 0, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login", target: "up", lastOta: "fw-1.1.0 @ 1699900000000" },
+      { id: "node-02", label: "example target two (flaky link)", group: "group-a", ip: "10.0.0.12", fw: "1.2.0", status: "online", rttMs: 22, rttAvgMs: 18, jitterMs: 55, lossPct: 6, nodeUptimeMs: 3 * 3600e3, reconnects: 4, ageMs: 4000, caps: "hid,cdc,serial_tx,ota", layout: "de", promptState: "shell", target: "down" },
       { id: "node-03", label: "example target three (old fw)", group: "group-b", ip: "10.0.0.13", fw: "0.9.4", status: "offline", rttMs: null, ageMs: 8600e3, caps: "hid,cdc", layout: "us", promptState: null },
     ],
     consoles: {
@@ -2412,6 +2473,7 @@
       lastSeen: now() - (n.ageMs || 0), inflight: 0,
       layout: n.layout || "us", promptState: n.promptState != null ? n.promptState : null, target: n.target || "unknown",
       lastOta: n.lastOta != null ? n.lastOta : null,
+      rttAvgMs: n.rttAvgMs, jitterMs: n.jitterMs, lossPct: n.lossPct, nodeUptimeMs: n.nodeUptimeMs, reconnects: n.reconnects || 0,
     }));
     state.chords = (d.chords || []).map((c) => ({ id: c.id, label: c.label, chord: c.chord || [] }));
     state.bridge = Object.assign({ enabled: false, bind: "0.0.0.0", ports: [] }, d.bridge || {});

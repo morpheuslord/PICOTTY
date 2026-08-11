@@ -44,7 +44,13 @@ class DriverNode:
     async def _reader_pump(self):
         try:
             while True:
-                self.inbox.put_nowait(await read_frame(self.reader))
+                frame = await read_frame(self.reader)
+                # Answer hub keepalive pings like a real node so RTT/telemetry
+                # works; keep pings out of the inbox so expect_frame stays clean.
+                if frame.get("type") == "ping":
+                    await self.send({"type": "pong", "nonce": frame.get("nonce")})
+                    continue
+                self.inbox.put_nowait(frame)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
 
@@ -55,10 +61,12 @@ class DriverNode:
     async def output(self, text):
         await self.send({"type": "output", "text": text, "ts": 0})
 
-    async def heartbeat(self, host=None):
+    async def heartbeat(self, host=None, up=None):
         msg = {"type": "heartbeat", "id": self.node_id}
         if host is not None:
             msg["host"] = bool(host)
+        if up is not None:
+            msg["up"] = int(up)
         await self.send(msg)
 
     async def expect_frame(self, pred, timeout=5.0):

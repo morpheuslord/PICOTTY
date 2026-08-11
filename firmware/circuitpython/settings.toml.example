@@ -56,6 +56,23 @@ KEYBOARD_LAYOUT = "us"
 RECONNECT_BACKOFF_START_MS = 1000
 RECONNECT_BACKOFF_MAX_MS = 30000
 
+# Dead-hub detection (ms). If no frame arrives from the hub within this window,
+# the node treats the link as dead and reconnects — this catches a half-open
+# socket where our own sends still buffer locally but nothing reaches the hub.
+# The hub pings each node on an interval (~5s), so keep this several intervals
+# wide. Set 0 to disable (e.g. if pairing with an older hub that does not ping).
+HUB_TIMEOUT_MS = 20000
+
+# Max time (ms) a single send may stall on a full TX buffer before the link is
+# declared dead. Bounds a wedged socket so it reconnects instead of spinning
+# until the watchdog resets the node. Keep it under WATCHDOG_TIMEOUT_S.
+SEND_MAX_WAIT_MS = 2000
+
+# After this many back-to-back connects that never reached the hub, re-initialize
+# the interface to re-acquire DHCP. Recovers a node that powered up before its
+# DHCP server (e.g. after a site power cut) or whose lease went bad. 0 disables.
+REBIND_AFTER_FAILURES = 5
+
 # Hard cap on a single inbound frame (bytes). An oversized length prefix is
 # treated as a desync and drops the connection rather than growing memory.
 MAX_FRAME_BYTES = 16384

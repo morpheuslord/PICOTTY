@@ -11,13 +11,19 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Optional
 
 from . import config
 from .db import Database
 from .eventbus import EventBus
 from .protocol import encode_frame
 from .registry import Inflight, Registry
-from .utils import gen_cmd_id, gen_nonce, now_ms
+from .utils import gen_cmd_id, gen_nonce, net_stats, now_ms
+
+# How many recent ping samples the rolling link-quality window keeps. At the
+# default 5s ping cadence this is ~100s of history — enough to see jitter and
+# transient loss without letting a long-past blip dominate the current picture.
+RTT_WINDOW = 20
 
 
 def build_node_frame(cmd_id: str, command: dict) -> dict:
@@ -114,6 +120,16 @@ class Hub:
             return  # a newer connection owns this id now
         state.status = "offline"
         self.registry.remove(node_id)
+        # Tear the socket down. Without this a node marked offline by the liveness
+        # sweep (a stale but still-OPEN half-open connection) would linger: the
+        # read loop keeps absorbing its frames onto this now-detached state, so the
+        # node never re-registers and shows offline forever while it is happily
+        # still sending. Closing forces the node to see peer-closed and reconnect
+        # with a fresh hello. Idempotent with the handler's own finally-close.
+        try:
+            state.writer.close()
+        except Exception:
+            pass
         await self.db.touch_node(node_id, now_ms())
         # Fail any awaiting OTA request futures so a push in flight ends promptly
         # instead of waiting out its timeout.
@@ -262,7 +278,11 @@ class Hub:
         return {"ok": True, "status": result.get("status"), "payload": result.get("payload"), "result": result}
 
     async def ping_node(self, node_id: str, timeout: float = 2.0):
-        """Send a ping and await the matching pong. Returns RTT ms or None."""
+        """Send a ping and await the matching pong. Returns RTT ms or None.
+
+        Every probe (delivered or lost) is folded into the node's rolling
+        link-quality window so the dashboard can show jitter and loss, and a
+        telemetry pulse is broadcast so browsers update live."""
         state = self.registry.get(node_id)
         if state is None or state.status == "offline":
             return None
@@ -271,15 +291,37 @@ class Hub:
         fut = loop.create_future()
         state.pending_pongs[nonce] = fut
         sent = now_ms()
+        rtt = None
         try:
             await self.send_frame(state, {"type": "ping", "nonce": nonce})
             await asyncio.wait_for(fut, timeout)
+            rtt = now_ms() - sent
+            state.rtt_ms = rtt
         except (asyncio.TimeoutError, OSError, ConnectionError):
             state.pending_pongs.pop(nonce, None)
-            return None
-        rtt = now_ms() - sent
-        state.rtt_ms = rtt
+            # A send error means the socket is already gone; don't score it as
+            # link jitter (the sweep/handler will take the node offline). A pure
+            # timeout, though, is a genuinely lost probe and counts toward loss.
+        self._record_rtt(state, rtt)
         return rtt
+
+    def _record_rtt(self, state, rtt) -> None:
+        """Append one ping sample (RTT ms, or None for a lost probe) to the
+        node's window, recompute the derived quality metrics, and broadcast."""
+        state.rtt_window.append(rtt)
+        if len(state.rtt_window) > RTT_WINDOW:
+            del state.rtt_window[: len(state.rtt_window) - RTT_WINDOW]
+        s = net_stats(state.rtt_window)
+        state.rtt_avg_ms = s["avg"]
+        state.rtt_min_ms = s["min"]
+        state.rtt_max_ms = s["max"]
+        state.jitter_ms = s["jitter"]
+        state.loss_pct = s["loss"]
+        self.eventbus.broadcast({
+            "event": "node_net", "id": state.node_id,
+            "rtt_ms": state.rtt_ms, "rtt_avg_ms": s["avg"],
+            "jitter_ms": s["jitter"], "loss_pct": s["loss"],
+        })
 
     # -- target (attached machine) liveness -----------------------------------
 
@@ -335,5 +377,21 @@ class Hub:
             "connected_at": state.connected_at if state else None,
             "rtt_ms": state.rtt_ms if online else None,
             "inflight": len(state.inflight) if state else 0,
+            # Link quality + activity (registry-only; null when offline).
+            "rtt_avg_ms": state.rtt_avg_ms if online else None,
+            "rtt_min_ms": state.rtt_min_ms if online else None,
+            "rtt_max_ms": state.rtt_max_ms if online else None,
+            "jitter_ms": state.jitter_ms if online else None,
+            "loss_pct": state.loss_pct if online else None,
+            "node_uptime_ms": self._node_uptime_now(state) if online else None,
+            "reconnects": state.reconnects if state else 0,
         }
         return merged
+
+    @staticmethod
+    def _node_uptime_now(state) -> Optional[int]:
+        """The node's firmware uptime projected to now: the last value it reported
+        plus the wall-clock elapsed since we sampled it. None until first heard."""
+        if state is None or state.node_uptime_ms is None:
+            return None
+        return state.node_uptime_ms + max(0, now_ms() - state.node_uptime_at)

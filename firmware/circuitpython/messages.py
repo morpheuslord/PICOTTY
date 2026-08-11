@@ -16,17 +16,23 @@ def hello(node_id, token, fw, cap, layout=None):
     return msg
 
 
-def heartbeat(node_id, host=None):
+def heartbeat(node_id, host=None, up=None):
     """Liveness pulse on the heartbeat interval. Not persisted per beat.
 
     `host` reports whether the TARGET machine's USB host has us enumerated — a
     proxy for 'the machine is powered and running'. True = machine up, False =
     node still powered (e.g. USB standby) but the target is off/hung, None =
     firmware too old to report it. Lets the hub show target liveness distinctly
-    from node liveness."""
+    from node liveness.
+
+    `up` is the node's firmware uptime in ms (monotonic since boot). The hub
+    shows it and watches for it jumping backwards, which flags an unannounced
+    node reboot. Omitted by old firmware, which the hub treats as unknown."""
     msg = {"type": "heartbeat", "id": node_id}
     if host is not None:
         msg["host"] = bool(host)
+    if up is not None:
+        msg["up"] = int(up)
     return msg
 
 
