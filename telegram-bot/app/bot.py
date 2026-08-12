@@ -38,6 +38,7 @@ HELP = """<b>PICOTTY hub bot</b>
 /status — hub + node roster
 /nodes — compact node list
 /uptime [node] — per-node detail
+/telemetry [node] — link quality (rtt/jitter/loss)
 
 <b>Shell (armed)</b>
 /arm &lt;code&gt; — arm with your TOTP
@@ -166,6 +167,21 @@ def build_application(cfg: Config):
         node = await _fetch_node(update, node_id)
         if node is not None:
             await reply(update, formatting.render_uptime(node))
+
+    async def cmd_telemetry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        # With a node arg, show that node's link detail; bare, show the fleet
+        # roster (the more useful view for telemetry — link health at a glance).
+        if context.args:
+            node = await _fetch_node(update, context.args[0])
+            if node is not None:
+                await reply(update, formatting.render_telemetry_node(node))
+            return
+        try:
+            nodes = await hub.nodes()
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await reply(update, formatting.render_telemetry(nodes))
 
     # ---- tier 3: arming -----------------------------------------------------
 
@@ -359,6 +375,7 @@ def build_application(cfg: Config):
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("nodes", cmd_nodes))
     app.add_handler(CommandHandler("uptime", cmd_uptime))
+    app.add_handler(CommandHandler("telemetry", cmd_telemetry))
 
     app.add_handler(CommandHandler("arm", cmd_arm))
     app.add_handler(CommandHandler("disarm", cmd_disarm))

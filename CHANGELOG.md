@@ -2,7 +2,7 @@
 
 All notable changes to PICOTTY. This project adheres to [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## v1.0.3 — 2026-08-12
 
 A reliability pass on node presence: nodes no longer get stuck showing offline
 while alive, both ends recover from a dropped link on their own, and the
@@ -51,6 +51,14 @@ never re-registered. Hardened both sides of the link:
 Node firmware bumped to **1.2.0**. The node pinger and dead-hub timeout are a
 matched pair: run the updated hub alongside 1.2.0 firmware (or set
 `HUB_TIMEOUT_MS = 0` to pair 1.2.0 nodes with an older, non-pinging hub).
+
+### Telegram sidecar — `/telemetry` (picotty-telegram 1.1.0)
+
+- **`/telemetry`** surfaces the new link telemetry over chat: bare, it prints a
+  per-node roster (rtt avg, jitter, loss %, a good/fair/poor quality rating, and
+  reconnect count); `/telemetry <node>` gives that node's detail plus firmware
+  uptime. Requires a hub on **1.0.3+** (the fields it reads); the sidecar's
+  `picotty` floor is bumped accordingly.
 
 ## v1.0.2 — 2026-08-05
 

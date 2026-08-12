@@ -136,6 +136,48 @@ def test_render_nodes_markers():
     assert "tx" in out
 
 
+# -- telemetry ----------------------------------------------------------------
+
+def test_link_quality_thresholds():
+    # Mirrors the dashboard's netQuality: loss>=10 or jitter>=100 → poor;
+    # loss>=2 or jitter>=40 → fair; else good; None jitter → no telemetry.
+    assert formatting.link_quality({"jitter_ms": None}) is None
+    assert formatting.link_quality({"jitter_ms": 5, "loss_pct": 0})[0] == "good"
+    assert formatting.link_quality({"jitter_ms": 55, "loss_pct": 0})[0] == "fair"
+    assert formatting.link_quality({"jitter_ms": 5, "loss_pct": 3})[0] == "fair"
+    assert formatting.link_quality({"jitter_ms": 120, "loss_pct": 0})[0] == "poor"
+    assert formatting.link_quality({"jitter_ms": 5, "loss_pct": 15})[0] == "poor"
+
+
+def test_dur_is_a_span_not_a_timestamp():
+    assert formatting._dur(None) == "—"
+    assert formatting._dur(45_000) == "45s"
+    assert formatting._dur(90_000) == "1m"
+    assert formatting._dur(3 * 3600_000 + 12 * 60_000) == "3h 12m"
+    assert formatting._dur(5 * 86400_000 + 2 * 3600_000) == "5d 2h"
+
+
+def test_render_telemetry_roster_and_detail():
+    nodes = [
+        {"id": "node-01", "status": "online", "target": "up",
+         "rtt_ms": 3, "rtt_avg_ms": 3, "rtt_min_ms": 2, "rtt_max_ms": 5,
+         "jitter_ms": 1, "loss_pct": 0,
+         "node_uptime_ms": 5 * 86400_000 + 2 * 3600_000, "reconnects": 0},
+        {"id": "node-02", "status": "online", "target": "down",
+         "rtt_ms": 22, "rtt_avg_ms": 18, "jitter_ms": 55, "loss_pct": 6,
+         "node_uptime_ms": 3 * 3600_000, "reconnects": 4},
+        {"id": "node-03", "status": "offline"},
+    ]
+    roster = formatting.render_telemetry(nodes)
+    assert "good" in roster and "fair" in roster
+    assert "No nodes" in formatting.render_telemetry([])
+    detail = formatting.render_telemetry_node(nodes[1])
+    assert "node-02" in detail and "🟡 fair" in detail
+    assert "5d 2h" in formatting.render_telemetry_node(nodes[0])
+    # Offline node: no telemetry, renders without raising.
+    assert "no telemetry" in formatting.render_telemetry_node(nodes[2])
+
+
 # -- output pump summarize ----------------------------------------------------
 
 def test_output_pump_summarizes():

@@ -22,7 +22,7 @@ no webhook, no public endpoint. The only firewall change is an egress allow to
 
 | Tier | Commands | Gate |
 |---|---|---|
-| **1 · Stats** | `/status` `/nodes` `/uptime [node]` | allowlist |
+| **1 · Stats** | `/status` `/nodes` `/uptime [node]` `/telemetry [node]` | allowlist |
 | **2 · Alerts** | node offline/online, watchdog recovery, command failed, hub restart; `/mute` `/unmute` | allowlist |
 | **3 · Terminal** | `/shell [node]`, plain text → getty, `/ctrlc` `/ctrld` `/ctrlz` `/esc` `/tab` `/enter` `/up` `/down` `/left` `/right`, `/reboot`, `/sysrq` | allowlist **+ armed (TOTP)** |
 
@@ -81,7 +81,7 @@ bash telegram-bot/scripts/run.sh              # foreground (dev)
 bash telegram-bot/scripts/install-service.sh  # systemd unit (starts on boot)
 ```
 
-Then in Telegram: `/status`, `/nodes`, `/uptime`, and — after `/arm <code>` —
+Then in Telegram: `/status`, `/nodes`, `/uptime`, `/telemetry`, and — after `/arm <code>` —
 `/shell <node>`. The full walkthrough (with the security model and the credential
 flow) is in **[../docs/telegram.md](../docs/telegram.md)**.
 
