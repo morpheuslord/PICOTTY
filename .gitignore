@@ -29,6 +29,7 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+.claude/
 
 # CircuitPython compile cache (if any lands here)
 *.mpy.bak
