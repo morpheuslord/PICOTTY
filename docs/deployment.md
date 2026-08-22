@@ -68,6 +68,20 @@ flowchart TD
 5. **Operate.** Open `http://<hub-ip>:8080`, pick a node, watch its console, and
    drive it (keys, chords, macros, bulk). Everything is logged.
 
+## Optional: a backup hub
+
+For failover, stand up a **second hub** and point boards at it. The two hubs are
+independent (own DB each) and share only the node token:
+
+1. Install the backup hub exactly like the primary, but give it a **distinct
+   `HUB_ID`** (`HUB_ID=hub-backup picotty-hub`) so you can tell them apart.
+2. Set the **same node token** on both hubs (its `node_token_hash` must match), so
+   either can authenticate the same board.
+3. On each node's `settings.toml`, point `HUB_IP_BACKUP` at the backup hub. Nodes
+   prefer the primary and fail over to the backup when it's unreachable.
+
+Full model, runtime steering, and token setup: **[dual-hub.md](dual-hub.md)**.
+
 ## Script execution reference
 
 All shell scripts are run with `bash <script>` (no chmod needed). Python tools run

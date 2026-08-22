@@ -64,12 +64,29 @@ Then in Telegram: `/status`, `/nodes`, `/uptime`, and — after `/arm <code>` �
 | Tier | Commands | Gate |
 |---|---|---|
 | **1 · Stats** | `/status` `/nodes` `/uptime [node]` | allowlist |
+| **1b · Read-only** | `/events [n]` (recent audit), `/log <node> [lines]` (recent console), `/search <text>` (search console history), `/ping <node>` (active RTT), `/hubs`, `/macros`, `/runbooks` | allowlist |
 | **2 · Alerts** | node down/up, watchdog recovery, command failed, hub restart; `/mute` `/unmute` | allowlist |
 | **3 · Terminal** | `/shell [node]`, plain text → getty, control keys (`/ctrlc` `/ctrld` `/ctrlz` `/esc` `/tab` `/enter` …), `/reboot`, `/sysrq` | allowlist **+ armed (TOTP)** |
+| **3b · Fleet** | `/bulk <text>` (type into every online node), `/runmacro <id> [node …]`, `/runbook <id> <node …\|all\|group:NAME>`, `/hub <node> …` | allowlist **+ armed (TOTP)** |
 
 Tier 3 rides the hub `send` command and is gated on the node advertising
-`serial_tx`. The full command reference is in
-[../telegram-bot/README.md](../telegram-bot/README.md).
+`serial_tx`. The read-only and fleet commands are thin wrappers over existing hub
+REST — nothing new on the hub. Fleet commands touch many boards at once, so they
+sit behind the same break-glass arming as the shell. The full command reference is
+in [../telegram-bot/README.md](../telegram-bot/README.md).
+
+### Dual-hub commands
+
+With a [backup hub](dual-hub.md) configured, two more commands surface which hub
+each board is on and let you steer it:
+
+- **`/hubs`** (allowlist) — list every board and the hub it's currently connected
+  to (its `via <label>`).
+- **`/hub <node> <switch|prefer|pin|unpin> [target]`** (armed) — steer a board:
+  move it now (`switch`), make a hub its home (`prefer`), lock it (`pin`), or
+  release a pin (`unpin`). It maps to `POST /api/nodes/{id}/hub`; because it
+  redirects control of a board, it is armed / break-glass gated like the shell.
+  See [dual-hub.md](dual-hub.md) for the model.
 
 ## Security model
 
@@ -78,8 +95,9 @@ Tier 3 rides the hub `send` command and is gated on the node advertising
 - **Break-glass arming** for tier 3. The allowlist alone isn't enough: a
   compromised phone would otherwise hold shell access. `/arm <TOTP>` arms the
   shell for a bounded window, then it **auto-disarms**; an **idle timeout** ends
-  a forgotten session; a replayed code is rejected. Stats and alerts are always
-  on — only `/shell`, `/reboot`, `/sysrq` require armed.
+  a forgotten session; a replayed code is rejected. Stats, read-only lookups, and
+  alerts are always on — the shell (`/shell`, `/reboot`, `/sysrq`) and the fleet
+  actions (`/bulk`, `/runmacro`, `/runbook`, `/hub`) require armed.
 - **Passwords stay out of chat**: the getty doesn't echo, so nothing sensitive
   is relayed back (your *typed* commands are still in chat history — deleting
   them is on you).

@@ -228,6 +228,19 @@ class Hub:
             await self.db.insert_event("cmd", node_id, audit_detail, now_ms())
         return {"ok": True}
 
+    async def send_hub_directive(self, node_id: str, action: str, target: str = None) -> dict:
+        """Steer a node between its configured hubs (dual-hub failover).
+
+        action is switch|prefer|pin|unpin; target is the destination hub's label
+        (required for all but unpin). The node validates the target against its own
+        configured hubs, so this can only move a board between hubs it already
+        knows — never to an arbitrary address."""
+        frame = {"type": "hub_directive", "action": action}
+        if target is not None:
+            frame["target"] = target
+        detail = "hub directive: %s%s" % (action, (" -> %s" % target) if target else "")
+        return await self.send_control(node_id, frame, detail)
+
     async def bridge_send(self, node_id: str, payload: bytes) -> bool:
         """Push raw bytes to a node's serial port for the raw serial bridge.
 
@@ -371,6 +384,8 @@ class Hub:
             "ip": state.ip if state else "",
             "capabilities": state.capabilities if state else [],
             "layout": state.layout if state else "us",
+            # Which of the node's configured hubs it reached us on (dual-hub).
+            "hub_label": (state.hub_label if online else None),
             "prompt_state": state.prompt_state if online else None,
             "target": self.target_state(state),
             "host_up": (state.host_up if online else None),

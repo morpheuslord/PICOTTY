@@ -33,6 +33,10 @@ class NodeState:
     fw_version: str = ""
     capabilities: list = field(default_factory=list)
     layout: str = "us"  # keyboard layout the node reported in hello (read-only)
+    # Which of the node's configured hubs it dialed to reach us ("primary" /
+    # "backup" / a custom label). None for single-hub or old firmware. Reported in
+    # hello and refreshed by heartbeat; read-only, surfaced in the node API.
+    hub_label: Optional[str] = None
     rtt_ms: Optional[int] = None
     inflight: dict = field(default_factory=dict)  # cmd_id -> Inflight
     # Live prompt-state classification (registry-only, like rtt_ms). Set by the

@@ -31,6 +31,29 @@ on forwarded output, non-blocking I/O throughout, a bounded connect timeout so a
 down hub never hangs the loop, an ~8 s RP2040 watchdog (armed only after startup so
 enumeration/DHCP don't false-trip it), and a unique MAC derived per node id.
 
+Firmware is now **1.3.0**.
+
+## Dual-hub failover
+
+A node can carry a **primary and a backup hub** and fail over between them — the
+same reconnect signals above drive it, with no extra socket. Set the backup keys
+in `settings.toml`:
+
+```toml
+HUB_IP_BACKUP = "10.20.0.11"   # set this to enable failover (unset = single-hub)
+HUB_PORT_BACKUP = 9000
+HUB_LABEL = "primary"          # labels shown on the dashboard / in Telegram
+HUB_LABEL_BACKUP = "backup"
+HUB_FAILBACK = "sticky"        # sticky (default) | preemptive
+HUB_FAILOVER_TRIES = 2         # connect failures before rotating to the other hub
+```
+
+The node prefers the primary and, after `HUB_FAILOVER_TRIES` failed connects,
+rotates to the backup; a hub can also steer a board at runtime. Leaving
+`HUB_IP_BACKUP` unset keeps the old single-hub behaviour, so existing configs are
+unaffected. Both hubs must share the node token. Full model, the selector, and the
+steering directives are in **[dual-hub.md](dual-hub.md)**.
+
 ## LED status codes
 
 | Pattern | Meaning |

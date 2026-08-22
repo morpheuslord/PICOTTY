@@ -125,6 +125,58 @@ def test_render_nodes_empty():
     assert "No nodes" in formatting.render_nodes([])
 
 
+def test_render_events():
+    assert "No events" in formatting.render_events([])
+    evs = [{"ts": int(time.time() * 1000), "type": "node_up", "node_id": "n1", "detail": "registered via primary"},
+           {"ts": int(time.time() * 1000), "type": "cmd", "node_id": None, "detail": "reboot"}]
+    out = formatting.render_events(evs)
+    assert "node_up" in out and "primary" in out and "<pre>" in out
+
+
+def test_render_dispatch_counts():
+    d = [{"id": "a", "status": "sent"}, {"id": "b", "status": "skipped", "reason": "offline"},
+         {"id": "c", "status": "error"}, {"id": "d", "status": "sent"}]
+    out = formatting.render_dispatch("Bulk", d)
+    assert "2 sent" in out and "1 skipped" in out and "1 error" in out
+
+
+def test_render_hubs_shows_labels():
+    nodes = [{"id": "n1", "status": "online", "hub_label": "primary"},
+             {"id": "n2", "status": "online", "hub_label": "backup"},
+             {"id": "n3", "status": "offline"}]
+    out = formatting.render_hubs(nodes)
+    assert "primary" in out and "backup" in out and "—" in out
+    assert "No nodes" in formatting.render_hubs([])
+
+
+def test_render_search_and_log():
+    assert "No matches" in formatting.render_search("x", [])
+    matches = [{"node_id": "n1", "received_at": int(time.time() * 1000), "text": "\x1b[32mfound it\x1b[0m\n"}]
+    out = formatting.render_search("found", matches)
+    assert "found it" in out and "1 match" in out
+    assert "No recent output" in formatting.render_output_log("n1", [])
+    log = formatting.render_output_log("n1", [{"text": "line1\n"}, {"text": "line2\n"}])
+    assert "line1" in log and "line2" in log
+
+
+def test_render_macros_and_runbooks():
+    assert "No macros" in formatting.render_macros([])
+    assert "No runbooks" in formatting.render_runbooks([])
+    m = formatting.render_macros([{"id": 3, "name": "reset", "dangerous": True}])
+    assert "/runmacro 3" in m and "reset" in m and "⚠️" in m
+    r = formatting.render_runbooks([{"id": 5, "name": "provision"}])
+    assert "/runbook 5" in r and "provision" in r
+
+
+def test_render_uptime_includes_hub():
+    node = {"id": "n1", "status": "online", "hub_label": "backup",
+            "capabilities": ["hid"], "last_seen": int(time.time() * 1000)}
+    assert "hub: backup" in formatting.render_uptime(node)
+    # a node without a hub label omits the line
+    node2 = {"id": "n2", "status": "online", "capabilities": ["hid"]}
+    assert "hub:" not in formatting.render_uptime(node2)
+
+
 def test_render_nodes_markers():
     nodes = [
         {"id": "a", "status": "online", "target": "up",

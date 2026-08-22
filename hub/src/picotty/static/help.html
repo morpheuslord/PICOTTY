@@ -133,6 +133,7 @@
       <a class="toc" href="#reboot-machine">Reboot machine</a>
       <a class="toc" href="#prompt-state">Prompt-state badges</a>
       <a class="toc" href="#target-liveness">Machine up/dead badge</a>
+      <a class="toc" href="#failover">Dual-hub failover</a>
       <div class="toc-group">Automation</div>
       <a class="toc" href="#macros">Macros</a>
       <a class="toc" href="#sequences">Sequences &amp; steps</a>
@@ -339,6 +340,23 @@
           </table></div>
           <p>The badge only appears for <strong>online</strong> nodes; when a node goes offline entirely (its target lost power and took the Pico with it), the whole row dims and the node dot goes hollow instead. Target liveness is <strong>live status, never persisted</strong>: it rides the node's heartbeat as <code>target</code> and is exposed read-only on <code>GET /api/nodes/{id}</code>.</p>
           <p class="callout info">A node that vanishes completely usually means the <em>target</em> lost power (the Pico is bus-powered from it) — see <a href="#nodes">Nodes</a>. A <span class="mono">machine dead</span> badge is the more interesting case: the node is alive and talking, but its host stopped enumerating — a hang, a power-off, or a target mid-reset.</p>
+        </section>
+
+        <!-- ================= DUAL-HUB FAILOVER ================= -->
+        <section id="failover">
+          <h2>Dual-hub failover <a class="permalink" href="#failover">#</a></h2>
+          <p class="where">Where: <b>Header brand chip (<span class="mono">hub: …</span>)</b>, <b>node rows &amp; detail header (<span class="mono">via …</span> badge)</b>, and the <b>“Hub” button in the detail header</b>.</p>
+          <p>A node can be configured with more than one hub — typically a <code>primary</code> and a <code>backup</code> — and dials home to whichever it can reach, failing over automatically when a hub goes away. So you always know which hub this dashboard is driving, its name is shown as a small <span class="mono">hub: &lt;hub-id&gt;</span> chip in the top-left brand area (from <code>GET /api/health</code>). Each node reports the label of the hub it dialed to reach us; that shows as a <span class="mono">via &lt;label&gt;</span> chip on the node row and detail header (nothing renders for a single-hub setup or old firmware, where the label is <code>null</code>).</p>
+          <h3>The Hub control</h3>
+          <p>The <strong>Hub</strong> button in the detail header opens a small sheet to steer the selected node between its hubs. Because the dashboard doesn't know the node's <em>other</em> configured hub label, the target is a free-text field that defaults to the opposite of the node's current label (<code>backup</code> when it is on <code>primary</code>, else <code>primary</code>). Each action posts to <code>POST /api/nodes/{id}/hub</code> with <code>{action, target}</code>; the ok/error result is surfaced as a toast and the node is re-fetched so its <span class="mono">via …</span> badge updates.</p>
+          <div class="table-wrap"><table class="doc">
+            <tr><th>Action</th><th>Does</th><th>Body</th></tr>
+            <tr><td><strong>Move</strong> (switch)</td><td>Move to the target hub now — a one-shot switch. The node's preference is unchanged, so failover can move it back.</td><td class="mono">{action:"switch", target:"&lt;label&gt;"}</td></tr>
+            <tr><td><strong>Set home</strong> (prefer)</td><td>Make the target the node's preferred/home hub <em>and</em> move now. Persisted on the node.</td><td class="mono">{action:"prefer", target:"&lt;label&gt;"}</td></tr>
+            <tr><td><strong>Pin</strong></td><td>Lock the node to the target and ignore failover, moving now. Persisted.</td><td class="mono">{action:"pin", target:"&lt;label&gt;"}</td></tr>
+            <tr><td><strong>Unpin</strong></td><td>Release a pin so the node can fail over again. No target needed.</td><td class="mono">{action:"unpin"}</td></tr>
+          </table></div>
+          <p class="callout info">A node only honours a target it is already configured for — this can move a board between hubs it knows, never onto a hub it has never heard of. If a directive is rejected (unknown label, node offline), the error <code>detail</code> is shown in the toast and nothing changes.</p>
         </section>
 
         <!-- ================= MACROS ================= -->

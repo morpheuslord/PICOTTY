@@ -2,6 +2,63 @@
 
 All notable changes to PICOTTY. This project adheres to [Semantic Versioning](https://semver.org).
 
+## v1.1.0 — 2026-08-22
+
+Two features: a board can now be served by **two hubs** with automatic failover
+and runtime source-selection, and the **Telegram bot** gains a much larger command
+surface.
+
+### Added — dual-hub failover
+
+Give a node a **primary** and a **backup** hub. It prefers the primary, fails over
+to the backup when the primary is unreachable, and **either hub can drive the
+board** — so a dead main hub no longer means losing the fleet. See
+[docs/dual-hub.md](docs/dual-hub.md).
+
+- **Independent peers.** The two hubs run independently, each with its own SQLite
+  DB; they share only the **node token**. Failover moves the live control
+  connection, not the data — a board holds exactly one connection at a time, so no
+  split-brain and no cross-hub coordination. Per-hub data (queue, recordings, OTA
+  jobs, history) stays on the hub that recorded it.
+- **Node config** ([settings.toml](firmware/circuitpython/settings.toml.example)):
+  `HUB_IP_BACKUP`/`HUB_PORT_BACKUP`, display labels `HUB_LABEL`/`HUB_LABEL_BACKUP`,
+  `HUB_FAILBACK` (`sticky` default / `preemptive`), `HUB_FAILOVER_TRIES`. Absent
+  backup = today's single-hub behavior, fully backward compatible. The failover
+  state machine lives in a new, host-testable
+  [`hubselect.py`](firmware/circuitpython/hubselect.py).
+- **Runtime steering.** Each hub advertises its identity to a board on connect (a
+  `welcome` frame carrying the new `HUB_ID`), so the board knows **which hub it's
+  talking to**. An authenticated hub can then send a directive — **switch** (move
+  now), **prefer** (promote to home hub, persisted — "use my backup as my main"),
+  **pin**/**unpin** — restricted to the board's configured hubs. Drive it from the
+  dashboard's per-node **Hub** control, `POST /api/nodes/{id}/hub`, or Telegram.
+- **Hub:** new `HUB_ID` env (default hostname), shown on the dashboard and sent in
+  the welcome frame; a node's reported hub label is surfaced in the node API and on
+  the dashboard (a "via &lt;label&gt;" badge). Node firmware bumped to **1.3.0**.
+
+### Added — richer Telegram bot (picotty-telegram 1.2.0)
+
+Surfaced hub capabilities that were REST-ready but had no chat command:
+
+- **Read-only** (allowlist tier): `/events [n]` (recent audit), `/log <node>
+  [lines]` (recent console output), `/search <text>` (search console history),
+  `/ping <node>` (active RTT).
+- **Fleet** (break-glass **armed** tier): `/bulk <text>` (type a line into every
+  online node), `/macros` + `/runmacro <id> [node ...]`, `/runbooks` + `/runbook
+  <id> <node ...|all|group:NAME>`.
+- **Dual-hub:** `/hubs` (which hub each board is on) and `/hub <node>
+  <switch|prefer|pin|unpin> [target]` (armed).
+- New `picotty.client` SDK methods back these (`node_output`, `output_search`,
+  `ping`, `bulk_cmd`, `macros`/`run_macro`, `runbooks`/`run_runbook`,
+  `hub_directive`), so any client — not just the bot — can use them.
+
+### Verified
+
+Firmware selector 12/12 host unit checks; hub 7/7 db + **58/58** integration
+(incl. welcome frame, hub-label surfacing, and the directive endpoint); sidecar
+**23/23** unit + wiring smoke + **18/18** end-to-end against a real hub through
+`picotty.client` (incl. every new SDK method). No regressions.
+
 ## v1.0.3 — 2026-08-12
 
 A reliability pass on node presence: nodes no longer get stuck showing offline

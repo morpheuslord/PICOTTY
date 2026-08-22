@@ -21,6 +21,31 @@ NODE_TOKEN = "change-me-to-the-hub-token"
 HUB_IP = "10.20.0.10"
 HUB_PORT = 9000
 
+# --- Backup hub / failover (optional) ----------------------------------------
+# Set HUB_IP_BACKUP to give this node a SECOND hub to fall over to. The node
+# prefers the primary (HUB_IP) and switches to the backup only when the primary
+# is unreachable; either hub can drive the board, and a hub can redirect the node
+# at runtime (dashboard "Move to hub…"). Both hubs must share the SAME node token
+# (NODE_TOKEN above must match both hubs' node token). Leave unset for a single
+# hub — the node then behaves exactly as before.
+# HUB_IP_BACKUP = "10.20.0.11"
+# HUB_PORT_BACKUP = 9000
+#
+# Display labels for the two hubs (shown on the dashboard / in Telegram, and used
+# as the target name for runtime redirects). Defaults: "primary" / "backup".
+# HUB_LABEL = "primary"
+# HUB_LABEL_BACKUP = "backup"
+#
+# Failback policy after a failover:
+#   "sticky"     (default) stay on whichever hub is working — never interrupts a
+#                live session; move back manually (or via a directive) when ready.
+#   "preemptive" retry the most-preferred hub first on every reconnect, so a
+#                recovered primary is used again on the next reconnect.
+# HUB_FAILBACK = "sticky"
+#
+# Consecutive failures to reach the current hub before rotating to the other one.
+# HUB_FAILOVER_TRIES = 2
+
 # --- Networking (optional) ---------------------------------------------------
 # Leave STATIC_IP unset to use DHCP (the default). Set it for a fixed address;
 # a static node needs no DHCP lease upkeep.

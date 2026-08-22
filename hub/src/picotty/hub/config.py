@@ -9,8 +9,20 @@ the ``settings`` table at startup and can change live via the settings API.
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _default_hub_id() -> str:
+    """A human-readable name for THIS hub, shown on the dashboard and sent to
+    nodes in the `welcome` frame so a board knows which hub it reached. Defaults
+    to the host's name; override with HUB_ID (e.g. "hub-main" / "hub-backup" in a
+    dual-hub deployment)."""
+    try:
+        return os.environ.get("HUB_ID") or socket.gethostname() or "hub"
+    except Exception:
+        return os.environ.get("HUB_ID") or "hub"
 
 # The installed package root (…/site-packages/picotty, or src/picotty from a
 # source tree). Static assets ship inside the package alongside the code.
@@ -53,6 +65,10 @@ def _default_db_path() -> Path:
 @dataclass(frozen=True)
 class ProcessConfig:
     """Fixed for the lifetime of the process. Sourced from the environment."""
+
+    # This hub's identity, advertised to nodes in the welcome frame and shown on
+    # the dashboard. Distinct per hub in a dual-hub (primary/backup) deployment.
+    hub_id: str = _default_hub_id()
 
     tcp_host: str = os.environ.get("HUB_TCP_HOST", "0.0.0.0")
     tcp_port: int = _env_int("HUB_TCP_PORT", 9000)

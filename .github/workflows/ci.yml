@@ -38,6 +38,22 @@ jobs:
         working-directory: hub
         run: uv run python tests/test_integration.py
 
+  firmware:
+    name: firmware — hub-selector unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # hubselect.py is pure logic (no hardware imports), so the failover state
+      # machine runs on plain CPython — no CircuitPython or board needed.
+      - name: test_hubselect
+        run: python firmware/tests/test_hubselect.py
+
   telegram:
     name: telegram sidecar — unit + smoke
     runs-on: ubuntu-latest

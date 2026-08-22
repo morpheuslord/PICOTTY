@@ -18,10 +18,10 @@ from ..core import Hub
 from ..protocol import validate_send
 from ..utils import gen_token, hash_token, now_ms, verify_password
 from .models import (
-    BulkCmd, ChordCreate, ChordPatch, CmdBody, ExpectBody, KeysBody, LoginBody,
-    MacroCreate, MacroPatch, MacroRun, NodePatch, OTABundleCreate, OTABundleZip,
-    OTAPush, OTARollout, QueueBody, RunbookCreate, RunbookPatch, RunbookRun,
-    SequenceBody, SysrqBody, SettingsPatch, TelegramConfig,
+    BulkCmd, ChordCreate, ChordPatch, CmdBody, ExpectBody, HubDirective, KeysBody,
+    LoginBody, MacroCreate, MacroPatch, MacroRun, NodePatch, OTABundleCreate,
+    OTABundleZip, OTAPush, OTARollout, QueueBody, RunbookCreate, RunbookPatch,
+    RunbookRun, SequenceBody, SysrqBody, SettingsPatch, TelegramConfig,
 )
 
 router = APIRouter()
@@ -49,6 +49,7 @@ async def health(request: Request):
         "bind": config.PROCESS.tcp_host,
         "swarm_port": config.PROCESS.tcp_port,
         "web_port": config.PROCESS.http_port,
+        "hub_id": config.PROCESS.hub_id,
         "version": __version__,
     }
 
@@ -69,6 +70,7 @@ async def stats(request: Request):
         "ws_clients": hub.eventbus.client_count(),
         "nodes_online": hub.registry.online_count(),
         "nodes_total": hub.registry.count(),
+        "hub_id": config.PROCESS.hub_id,
         "per_node": per_node,
     }
 
@@ -189,6 +191,25 @@ async def post_ping(request: Request, node_id: str):
 async def post_reboot(request: Request, node_id: str):
     hub = hub_of(request)
     return await hub.send_control(node_id, {"type": "reboot"}, "node reboot requested")
+
+
+@router.post("/nodes/{node_id}/hub")
+async def post_hub_directive(request: Request, node_id: str, body: HubDirective):
+    """Steer a node between its configured hubs (dual-hub failover):
+      switch — move to `target` now (one-shot; preference unchanged)
+      prefer — make `target` the node's preferred hub AND move now (persisted)
+      pin    — lock to `target` (ignore failover) and move now (persisted)
+      unpin  — release a pin (no target)
+    The node ignores a target it isn't configured for, so this can only move a
+    board between hubs it already knows."""
+    hub = hub_of(request)
+    action = (body.action or "").strip().lower()
+    if action not in ("switch", "prefer", "pin", "unpin"):
+        return err("bad_action", "action must be switch|prefer|pin|unpin")
+    target = (body.target or "").strip() or None
+    if action != "unpin" and not target:
+        return err("bad_target", "a target hub label is required for %s" % action)
+    return await hub.send_hub_directive(node_id, action, target)
 
 
 @router.post("/nodes/{node_id}/sysrq")

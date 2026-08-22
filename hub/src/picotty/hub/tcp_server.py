@@ -12,7 +12,7 @@ import asyncio
 import json
 import socket
 
-from . import classifier
+from . import classifier, config
 from .core import Hub
 from .protocol import ProtocolError, read_frame
 from .registry import NodeState
@@ -57,6 +57,9 @@ async def handle_message(hub: Hub, state: NodeState, msg: dict) -> None:
         # Carry the target-machine liveness the node reported, if any.
         if "host" in msg:
             state.host_up = bool(msg.get("host"))
+        # Which hub the node reports it's connected to (dual-hub failover).
+        if "hub" in msg:
+            state.hub_label = msg.get("hub")
         # Firmware uptime (ms since the node booted). A value that jumps BACKWARDS
         # means the node rebooted unannounced (watchdog, power blip) while keeping
         # or quickly regaining its link — worth surfacing so a flapping node isn't
@@ -179,6 +182,7 @@ def make_handler(hub: Hub):
             fw = hello.get("fw", "")
             caps = hello.get("cap", []) or []
             layout = hello.get("layout") or "us"
+            hub_label = hello.get("hub")  # which of its hubs the node dialed (or None)
             ts = now_ms()
 
             # A reconnect supersedes any prior connection for this id.
@@ -195,15 +199,25 @@ def make_handler(hub: Hub):
                 node_id=node_id, writer=writer, addr=addr,
                 connected_at=ts, last_seen=ts, status="online",
                 fw_version=fw, capabilities=caps, layout=layout,
-                reconnects=reconnects,
+                hub_label=hub_label, reconnects=reconnects,
             )
             hub.registry.add(state)
             detail = "registered fw %s caps %s" % (fw, ",".join(caps))
+            if hub_label:
+                detail += " via %s" % hub_label
             if reconnects:
                 detail += " (reconnect #%d)" % reconnects
             await hub.audit("node_up", node_id, detail)
             node_row = await hub.db.get_node(node_id)
             hub.eventbus.broadcast({"event": "node_up", "id": node_id, "meta": hub.merge_node(node_row)})
+
+            # Tell the node which hub it reached, so it knows its source and a
+            # future app/dashboard redirect has an identity to reason about.
+            # Best-effort: a failed write just means the read loop below will error.
+            try:
+                await hub.send_frame(state, {"type": "welcome", "hub_id": config.PROCESS.hub_id})
+            except (OSError, ConnectionError):
+                pass
 
             # Deliver anything queued for this node while it was offline. Done
             # after node_up so the browser shows it online before commands flow.

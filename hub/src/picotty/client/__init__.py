@@ -100,6 +100,54 @@ class HubClient:
         data = await self.get("/events", since=since, limit=limit, type=type_)
         return data.get("events", [])
 
+    async def node_output(self, node_id: str, limit: int = 200) -> list[dict]:
+        """Recent console output chunks for a node: [{id, ts, text}, ...]."""
+        data = await self.get("/nodes/%s/output" % node_id, limit=limit)
+        return data.get("chunks", [])
+
+    async def output_search(self, q: str, node_id: Optional[str] = None,
+                            limit: int = 100) -> list[dict]:
+        """Find where a string scrolled past in the console history."""
+        data = await self.get("/output/search", q=q, node_id=node_id, limit=limit)
+        return data.get("matches", [])
+
+    async def ping(self, node_id: str) -> dict:
+        return await self.post("/nodes/%s/ping" % node_id)
+
+    async def bulk_cmd(self, node_ids: list, command: dict, stagger_ms: int = 0,
+                       skip_offline: bool = True) -> dict:
+        return await self.post("/bulk/cmd", {
+            "node_ids": list(node_ids), "command": command,
+            "stagger_ms": stagger_ms, "skip_offline": skip_offline})
+
+    async def macros(self) -> list[dict]:
+        return (await self.get("/macros")).get("macros", [])
+
+    async def run_macro(self, macro_id, node_ids: list, stagger_ms: int = 0) -> dict:
+        return await self.post("/macros/%s/run" % macro_id,
+                               {"node_ids": list(node_ids), "stagger_ms": stagger_ms})
+
+    async def runbooks(self) -> list[dict]:
+        return (await self.get("/runbooks")).get("runbooks", [])
+
+    async def run_runbook(self, rid, node_ids: Optional[list] = None,
+                          group: Optional[str] = None, stagger_ms: int = 0) -> dict:
+        body: dict = {"stagger_ms": stagger_ms}
+        if node_ids:
+            body["node_ids"] = list(node_ids)
+        if group:
+            body["group"] = group
+        return await self.post("/runbooks/%s/run" % rid, body)
+
+    async def hub_directive(self, node_id: str, action: str,
+                            target: Optional[str] = None) -> dict:
+        """Steer a node between its configured hubs (dual-hub failover):
+        action is switch|prefer|pin|unpin; target is the destination hub label."""
+        body: dict = {"action": action}
+        if target is not None:
+            body["target"] = target
+        return await self.post("/nodes/%s/hub" % node_id, body)
+
     async def cmd(self, node_id: str, command: dict) -> dict:
         return await self.post("/nodes/%s/cmd" % node_id, command)
 

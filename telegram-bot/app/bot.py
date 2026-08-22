@@ -40,6 +40,21 @@ HELP = """<b>PICOTTY hub bot</b>
 /uptime [node] — per-node detail
 /telemetry [node] — link quality (rtt/jitter/loss)
 
+<b>Read-only ops</b>
+/events [n] — recent audit events
+/log &lt;node&gt; [lines] — recent console output
+/search &lt;text&gt; — find it in console history
+/ping &lt;node&gt; — active round-trip time
+
+<b>Fleet (armed)</b>
+/bulk &lt;text&gt; — type a line into every online node
+/macros · /runmacro &lt;id&gt; [node ...]
+/runbooks · /runbook &lt;id&gt; &lt;node ...|all|group:NAME&gt;
+
+<b>Hubs (dual-hub failover)</b>
+/hubs — which hub each board is on
+/hub &lt;node&gt; &lt;switch|prefer|pin|unpin&gt; [target] — steer a board (armed)
+
 <b>Shell (armed)</b>
 /arm &lt;code&gt; — arm with your TOTP
 /disarm — end the armed window
@@ -320,6 +335,207 @@ def build_application(cfg: Config):
         alerts.unmute(context.args[0])
         await reply(update, "🔔 Unmuted <b>%s</b>." % formatting.esc(context.args[0]))
 
+    # ---- tier 1: read-only ops (events / log / search / ping) ---------------
+
+    async def _online_ids(update: Update):
+        try:
+            nodes = await hub.nodes()
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return None
+        return [n["id"] for n in nodes if n.get("status") == "online"]
+
+    async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        n = 15
+        if context.args and context.args[0].isdigit():
+            n = min(int(context.args[0]), 50)
+        try:
+            events = await hub.events(limit=n)
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await reply(update, formatting.render_events(events))
+
+    async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await reply(update, "Usage: /log &lt;node&gt; [lines]")
+            return
+        node_id = context.args[0]
+        limit = 200
+        if len(context.args) > 1 and context.args[1].isdigit():
+            limit = min(int(context.args[1]), 500)
+        try:
+            chunks = await hub.node_output(node_id, limit=limit)
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await reply(update, formatting.render_output_log(node_id, chunks))
+
+    async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await reply(update, "Usage: /search &lt;text&gt;")
+            return
+        q = " ".join(context.args)
+        try:
+            matches = await hub.output_search(q, limit=100)
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await reply(update, formatting.render_search(q, matches))
+
+    async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await reply(update, "Usage: /ping &lt;node&gt;")
+            return
+        node_id = context.args[0]
+        try:
+            res = await hub.ping(node_id)
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        if res.get("ok"):
+            await reply(update, "🏓 <b>%s</b>: %sms" % (formatting.esc(node_id), res.get("rtt_ms")))
+        else:
+            await reply(update, "❌ %s" % formatting.esc(str(res.get("detail") or res.get("error") or "no pong")))
+
+    # ---- tier 2/3: fleet automation (bulk / macros / runbooks) --------------
+
+    async def cmd_bulk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await ensure_armed(update):
+            return
+        if not context.args:
+            await reply(update, "Usage: /bulk &lt;text&gt;  — type a line into every online node")
+            return
+        ids = await _online_ids(update)
+        if ids is None:
+            return
+        if not ids:
+            await reply(update, "No online nodes.")
+            return
+        line = " ".join(context.args)
+        cid = update.effective_chat.id
+        try:
+            res = await hub.bulk_cmd(ids, {"type": "send", "data": line + "\r"})
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await audit.record("bulk", chat_id=cid, detail=line, ok=bool(res.get("ok", True)))
+        await reply(update, formatting.render_dispatch(
+            "Bulk send to %d node(s)" % len(ids), res.get("dispatched", [])))
+
+    async def cmd_macros(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            macros = await hub.macros()
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await reply(update, formatting.render_macros(macros))
+
+    async def cmd_runmacro(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await ensure_armed(update):
+            return
+        if not context.args or not context.args[0].isdigit():
+            await reply(update, "Usage: /runmacro &lt;id&gt; [node ...]  (default: all online). /macros to list.")
+            return
+        mid, targets = context.args[0], list(context.args[1:])
+        if not targets:
+            targets = await _online_ids(update)
+            if targets is None:
+                return
+        if not targets:
+            await reply(update, "No target nodes.")
+            return
+        cid = update.effective_chat.id
+        try:
+            res = await hub.run_macro(mid, targets)
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await audit.record("runmacro", chat_id=cid, detail=str(mid), ok=bool(res.get("ok", True)))
+        if not res.get("ok", True):
+            await reply(update, "❌ %s" % formatting.esc(str(res.get("detail") or res.get("error") or "failed")))
+            return
+        await reply(update, formatting.render_dispatch(
+            "Macro %s on %d node(s)" % (mid, len(targets)), res.get("dispatched", [])))
+
+    async def cmd_runbooks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            rbs = await hub.runbooks()
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await reply(update, formatting.render_runbooks(rbs))
+
+    async def cmd_runbook(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await ensure_armed(update):
+            return
+        if not context.args or not context.args[0].isdigit():
+            await reply(update, "Usage: /runbook &lt;id&gt; &lt;node ...|all|group:NAME&gt;. /runbooks to list.")
+            return
+        rid, rest = context.args[0], list(context.args[1:])
+        if not rest:
+            await reply(update, "Specify targets: node ids, <b>all</b>, or <b>group:NAME</b>.")
+            return
+        node_ids, group = None, None
+        if rest[0] == "all":
+            node_ids = await _online_ids(update)
+            if node_ids is None:
+                return
+        elif rest[0].startswith("group:"):
+            group = rest[0][len("group:"):]
+        else:
+            node_ids = rest
+        cid = update.effective_chat.id
+        try:
+            res = await hub.run_runbook(rid, node_ids=node_ids, group=group)
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await audit.record("runbook", chat_id=cid, detail=str(rid), ok=bool(res.get("ok", True)))
+        if not res.get("ok", True):
+            await reply(update, "❌ %s" % formatting.esc(str(res.get("detail") or res.get("error") or "failed")))
+            return
+        await reply(update, "▶️ Runbook <b>%s</b> started on %d node(s) — run %s" % (
+            formatting.esc(rid), len(res.get("nodes", [])), formatting.esc(str(res.get("run_id", "")))))
+
+    # ---- dual-hub failover (which hub a board is on) ------------------------
+
+    async def cmd_hubs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            nodes = await hub.nodes()
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await reply(update, formatting.render_hubs(nodes))
+
+    async def cmd_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await ensure_armed(update):
+            return
+        if len(context.args) < 2:
+            await reply(update, "Usage: /hub &lt;node&gt; &lt;switch|prefer|pin|unpin&gt; [target-hub]")
+            return
+        node_id, action = context.args[0], context.args[1].lower()
+        target = context.args[2] if len(context.args) > 2 else None
+        if action not in ("switch", "prefer", "pin", "unpin"):
+            await reply(update, "action must be switch|prefer|pin|unpin")
+            return
+        if action != "unpin" and not target:
+            await reply(update, "Usage: /hub &lt;node&gt; %s &lt;target-hub-label&gt;" % action)
+            return
+        cid = update.effective_chat.id
+        try:
+            res = await hub.hub_directive(node_id, action, target)
+        except Exception as e:
+            await reply(update, "⚠️ Hub unreachable: %s" % formatting.esc(str(e)))
+            return
+        await audit.record("hub_directive", chat_id=cid, node=node_id,
+                           detail="%s %s" % (action, target or ""), ok=bool(res.get("ok", True)))
+        if res.get("ok", True):
+            arrow = (" → %s" % formatting.esc(target)) if target else ""
+            await reply(update, "🛰️ <b>%s</b>: %s%s sent." % (formatting.esc(node_id), formatting.esc(action), arrow))
+        else:
+            await reply(update, "❌ %s" % formatting.esc(str(res.get("detail") or res.get("error") or "failed")))
+
     # ---- node picker (inline keyboard) --------------------------------------
 
     async def _node_picker(update: Update, action: str, prompt: str) -> None:
@@ -387,6 +603,18 @@ def build_application(cfg: Config):
     app.add_handler(CommandHandler("sysrq", cmd_sysrq))
     app.add_handler(CommandHandler("mute", cmd_mute))
     app.add_handler(CommandHandler("unmute", cmd_unmute))
+
+    app.add_handler(CommandHandler("events", cmd_events))
+    app.add_handler(CommandHandler("log", cmd_log))
+    app.add_handler(CommandHandler("search", cmd_search))
+    app.add_handler(CommandHandler("ping", cmd_ping))
+    app.add_handler(CommandHandler("bulk", cmd_bulk))
+    app.add_handler(CommandHandler("macros", cmd_macros))
+    app.add_handler(CommandHandler("runmacro", cmd_runmacro))
+    app.add_handler(CommandHandler("runbooks", cmd_runbooks))
+    app.add_handler(CommandHandler("runbook", cmd_runbook))
+    app.add_handler(CommandHandler("hubs", cmd_hubs))
+    app.add_handler(CommandHandler("hub", cmd_hub))
 
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))

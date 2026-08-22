@@ -23,11 +23,17 @@ no webhook, no public endpoint. The only firewall change is an egress allow to
 | Tier | Commands | Gate |
 |---|---|---|
 | **1 · Stats** | `/status` `/nodes` `/uptime [node]` `/telemetry [node]` | allowlist |
+| **1b · Read-only** | `/events [n]` (recent audit), `/log <node> [lines]` (recent console), `/search <text>` (search console history), `/ping <node>` (active RTT), `/hubs`, `/macros`, `/runbooks` | allowlist |
 | **2 · Alerts** | node offline/online, watchdog recovery, command failed, hub restart; `/mute` `/unmute` | allowlist |
 | **3 · Terminal** | `/shell [node]`, plain text → getty, `/ctrlc` `/ctrld` `/ctrlz` `/esc` `/tab` `/enter` `/up` `/down` `/left` `/right`, `/reboot`, `/sysrq` | allowlist **+ armed (TOTP)** |
+| **3b · Fleet** | `/bulk <text>` (type into every online node), `/runmacro <id> [node …]`, `/runbook <id> <node …\|all\|group:NAME>`, `/hub <node> <switch\|prefer\|pin\|unpin> [target]` | allowlist **+ armed (TOTP)** |
 
 Tier 3 is built on the hub `send` command and is **gated on the node advertising
-`serial_tx`** — a node whose firmware can't write serial won't open a session.
+`serial_tx`** — a node whose firmware can't write serial won't open a session. The
+read-only and fleet commands are thin wrappers over existing hub REST; the fleet
+commands touch many boards at once, so they sit behind the same break-glass arming
+as the shell. `/hubs` and `/hub` cover [dual-hub failover](../docs/dual-hub.md) —
+which hub each board is on, and steering a board to the other hub.
 
 ## Security model
 
@@ -36,8 +42,10 @@ Tier 3 is built on the hub `send` command and is **gated on the node advertising
 - **Break-glass arming** for tier 3. The allowlist alone isn't enough — a
   compromised phone or Telegram account would otherwise hold shell access. `/arm
   <TOTP>` arms the shell for a bounded window (`SHELL_ARM_WINDOW_S`, default 1 h),
-  then it auto-disarms. `/shell`, `/reboot`, `/sysrq` all require armed. Stats and
-  alerts are always on. An immediate TOTP replay is rejected.
+  then it auto-disarms. The shell (`/shell`, `/reboot`, `/sysrq`) and the fleet
+  actions (`/bulk`, `/runmacro`, `/runbook`, `/hub`) all require armed. Stats,
+  read-only lookups, and alerts are always on. An immediate TOTP replay is
+  rejected.
 - **Idle auto-close** (`SHELL_IDLE_TIMEOUT_S`, default 5 min) ends a forgotten
   session; a mid-session disarm closes it too.
 - **Password entry is safe for free**: the getty doesn't echo, so nothing

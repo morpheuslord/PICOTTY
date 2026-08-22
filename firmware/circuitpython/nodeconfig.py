@@ -62,9 +62,32 @@ class NodeConfig:
         self.node_id = _str("NODE_ID", required=True)
         self.token = _str("NODE_TOKEN", required=True)
 
-        # Hub location (HUB_IP preferred; HUB_HOST accepted as an alias)
+        # Hub location (HUB_IP preferred; HUB_HOST accepted as an alias).
+        # hub_host/hub_port are the ACTIVE target the transport dials; the
+        # HubSelector (code.py) points them at whichever hub it has chosen. They
+        # start on the primary so single-hub nodes behave exactly as before.
         self.hub_host = _str("HUB_IP") or _str("HUB_HOST", required=True)
         self.hub_port = _int("HUB_PORT", 9000)
+
+        # Optional BACKUP hub for failover. When HUB_IP_BACKUP (or
+        # HUB_HOST_BACKUP) is set, the node prefers the primary and fails over to
+        # the backup when the primary is unreachable; a hub can also redirect the
+        # node at runtime (see HubSelector). Labels are for display/telemetry.
+        # Absent -> a single-element list, i.e. today's single-hub behavior.
+        self.hub_label = _str("HUB_LABEL", "primary")
+        self.hubs = [{"label": self.hub_label, "host": self.hub_host, "port": self.hub_port}]
+        backup_host = _str("HUB_IP_BACKUP") or _str("HUB_HOST_BACKUP")
+        if backup_host:
+            self.hubs.append({
+                "label": _str("HUB_LABEL_BACKUP", "backup") or "backup",
+                "host": backup_host,
+                "port": _int("HUB_PORT_BACKUP", self.hub_port),
+            })
+        # Failback policy: "sticky" (default) stays on whichever hub is working;
+        # "preemptive" retries the most-preferred hub first on every reconnect.
+        self.hub_failback = (_str("HUB_FAILBACK", "sticky") or "sticky").strip().lower()
+        # Consecutive failures to reach the current hub before rotating to the next.
+        self.hub_failover_tries = _int("HUB_FAILOVER_TRIES", 2)
 
         # Networking
         self.static_ip = _str("STATIC_IP")

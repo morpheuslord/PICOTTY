@@ -492,6 +492,35 @@ async def checks():
     _, cl2 = http("GET", "/chords")
     record("chord delete", not any(c["id"] == cid for c in cl2.get("chords", [])))
 
+    # --- Dual-hub failover: welcome frame + hub_directive ----------------
+    fn = DriverNode("127.0.0.1", TCP_PORT, "drv-hub", TOKEN)
+    await fn.connect(hub="primary")
+    # The hub identifies itself right after auth so the node knows its source.
+    welcome = await fn.expect_frame(lambda fr: fr.get("type") == "welcome", timeout=4)
+    record("failover welcome-hub-id", welcome.get("hub_id") == "hub-test",
+           "hub_id=%s" % welcome.get("hub_id"))
+    await wait_for(lambda: get_node("drv-hub").get("status") == "online")
+    # The node's reported hub label is surfaced in the API.
+    record("failover hub-label-surfaced", get_node("drv-hub").get("hub_label") == "primary",
+           "hub_label=%s" % get_node("drv-hub").get("hub_label"))
+    # health/stats advertise this hub's id.
+    _, hb = http("GET", "/health")
+    record("failover health-hub-id", hb.get("hub_id") == "hub-test", "hub_id=%s" % hb.get("hub_id"))
+    # A directive is delivered down the node's socket as a hub_directive frame.
+    st, _dr = http("POST", "/nodes/drv-hub/hub", {"action": "prefer", "target": "backup"})
+    dfr = await fn.expect_frame(lambda fr: fr.get("type") == "hub_directive", timeout=4)
+    record("failover directive-delivered",
+           st == 200 and dfr.get("action") == "prefer" and dfr.get("target") == "backup",
+           "action=%s target=%s" % (dfr.get("action"), dfr.get("target")))
+    # unpin needs no target; a moving action without a target is rejected.
+    stu, ub = http("POST", "/nodes/drv-hub/hub", {"action": "unpin"})
+    record("failover unpin-no-target-ok", stu == 200 and ub.get("ok") is True)
+    stbad, bb = http("POST", "/nodes/drv-hub/hub", {"action": "switch"})
+    record("failover switch-needs-target", bb.get("ok") is False)
+    stbad2, bb2 = http("POST", "/nodes/drv-hub/hub", {"action": "bogus", "target": "x"})
+    record("failover rejects-bad-action", bb2.get("ok") is False)
+    await fn.close()
+
     passed = sum(1 for _, ok in _results if ok)
     total = len(_results)
     print("=== %d/%d integration checks passed ===" % (passed, total))
@@ -508,6 +537,7 @@ def main():
         "HUB_TCP_PORT": str(TCP_PORT),
         "HUB_HTTP_HOST": "127.0.0.1",
         "HUB_TCP_HOST": "127.0.0.1",
+        "HUB_ID": "hub-test",
         "SWARM_NODE_TOKEN": TOKEN,
         # Ensure the uvicorn subprocess can import picotty from the src/ layout
         # even when the package isn't installed into this interpreter.

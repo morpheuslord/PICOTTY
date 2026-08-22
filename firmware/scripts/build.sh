@@ -49,7 +49,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ENTRY=(boot.py code.py)
-MODULES=(wire.py netlink.py injector.py backchannel.py nodeconfig.py messages.py otaflash.py)
+MODULES=(wire.py netlink.py injector.py backchannel.py nodeconfig.py messages.py hubselect.py otaflash.py)
 
 if [[ "$STAGE" == "1" ]]; then
   DEST="${STAGE_DIR:-$FW_DIR/build/${NODE:-node}}"

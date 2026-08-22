@@ -36,6 +36,12 @@ class SysrqBody(BaseModel):
     key: Optional[str] = "b"   # b=reboot, o=poweroff, s=sync, e=term, i=kill, c=crash
 
 
+class HubDirective(BaseModel):
+    """Steer a node between its configured hubs (dual-hub failover)."""
+    action: str                        # "switch" | "prefer" | "pin" | "unpin"
+    target: Optional[str] = None       # hub label; required for all but "unpin"
+
+
 class ChordCreate(BaseModel):
     label: str
     chord: List[str]

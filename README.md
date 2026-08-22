@@ -88,12 +88,17 @@ methods (serial `reboot`, Ctrl+Alt+Del, Magic SysRq `Alt+SysRq+B`), **custom
 quick chords** you save and replay, an offline command queue, **asciicast**
 session replay, a raw **serial bridge** for `minicom`/PuTTY, webhook/**ntfy**
 alerting, per-node keyboard layouts, and **OTA firmware updates** (chunked,
-checksummed, **.zip-upload** bundles, canary rollout with watchdog-revert). The hub
+checksummed, **.zip-upload** bundles, canary rollout with watchdog-revert). Nodes now support **dual-hub failover** — a
+primary + backup hub per node, with runtime steering (move / set-home / pin) and a
+shared node token. The hub
 now ships as the **`picotty`** uv package (`uv tool install picotty`, with a
 `picotty.client` SDK), and an optional **Telegram bot sidecar** puts stats, alerts,
-and a break-glass terminal on your phone. Depth in
+and a break-glass terminal on your phone — now with **fleet commands** (`/bulk`,
+`/runmacro`, `/runbook`), read-only lookups (`/events`, `/log`, `/search`, `/ping`),
+and dual-hub steering (`/hubs`, `/hub`). Depth in
 **[docs/automation.md](docs/automation.md)**, **[docs/operations.md](docs/operations.md)**,
-**[docs/ota.md](docs/ota.md)**, **[docs/packaging.md](docs/packaging.md)**, and
+**[docs/ota.md](docs/ota.md)**, **[docs/packaging.md](docs/packaging.md)**,
+**[docs/dual-hub.md](docs/dual-hub.md)**, and
 **[docs/telegram.md](docs/telegram.md)**.
 
 ---
@@ -179,6 +184,7 @@ The full technical reference lives in **[docs/](docs/)**:
 | [hardware.md](docs/hardware.md) | Physical topology, bill of materials, component tree, sizing |
 | [deployment.md](docs/deployment.md) | The three build phases, the end-to-end workflow, the full script reference |
 | [firmware.md](docs/firmware.md) | Firmware lifecycle, LED codes, keyboard layout, OTA capability, hardening, CircuitPython version rules |
+| [dual-hub.md](docs/dual-hub.md) | Dual-hub failover: primary + backup hub per node, runtime steering, the independent-peers model, and the shared node token |
 | [operations.md](docs/operations.md) | Observability, prompt-state badges, HID vs Serial input, console renderer, session recording, serial bridge, alerting |
 | [automation.md](docs/automation.md) | Prompt-state detection, the expect (wait-for-output) engine, offline command queue, YAML runbooks |
 | [ota.md](docs/ota.md) | Over-the-wire firmware updates: the safety model and rollout posture |

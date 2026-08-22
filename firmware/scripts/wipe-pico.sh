@@ -136,8 +136,8 @@ try:
 except Exception:
     pass
 _targets = ["code.py","boot.py","settings.toml","wire.py","netlink.py","injector.py",
-            "backchannel.py","nodeconfig.py","messages.py","otaflash.py",
-            "error.txt","ota_pending.json"]
+            "backchannel.py","nodeconfig.py","messages.py","hubselect.py","otaflash.py",
+            "error.txt","ota_pending.json","hub_pref.json"]
 for _f in _targets:
     try:
         os.remove("/"+_f)

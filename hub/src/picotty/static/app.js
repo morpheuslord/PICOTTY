@@ -220,7 +220,7 @@
     wrap: true,
     leftOpen: true,
     rightOpen: true,
-    hub: { uptime_ms: 0, nodes_online: 0, nodes_total: 0, bind: "", swarm_port: 9000, web_port: 8080, version: "" },
+    hub: { uptime_ms: 0, nodes_online: 0, nodes_total: 0, bind: "", swarm_port: 9000, web_port: 8080, version: "", hub_id: "" },
     settings: {},
     toasts: [],
     dialog: null,
@@ -316,6 +316,23 @@
     return h("span", { title: tip,
       style: "flex:none;width:9px;height:9px;border-radius:50%;background:" + q.color + ";animation:sc-pulse 1.4s infinite" });
   }
+
+  // ---- dual-hub failover (phase 13) --------------------------------------
+  // Each node reports the label of the hub it dialed to reach us (hub_label:
+  // "primary"/"backup"/custom, or null on a single-hub setup / old firmware). A
+  // small "via <label>" chip surfaces it; nothing renders when null so a
+  // single-hub fleet stays uncluttered. Big variant for the detail header.
+  function hubBadge(label, opts) {
+    if (label == null || label === "") return null;
+    const big = opts && opts.big;
+    const pad = big ? "2px 8px" : "0 6px";
+    const fs = big ? "11px" : "10px";
+    return h("span", { title: "reached this hub via its \"" + label + "\" link (dual-hub failover)", "data-tip-help": "failover",
+      style: "flex:none;padding:" + pad + ";font-size:" + fs + ";font-weight:600;letter-spacing:0.02em;background:#3a6ea5;color:#eef4fb" }, "via " + label);
+  }
+  // The label to default the target field to: the opposite of the node's current
+  // hub_label, so the common "flip to the other hub" case needs no typing.
+  const otherHubLabel = (label) => (label === "primary" ? "backup" : "primary");
 
   // ---- serial bridge (phase 8) -------------------------------------------
   const bridgePortFor = (nodeId) => {
@@ -544,7 +561,11 @@
       h("span", { style: "font-size:13px;font-weight:600" }, val));
     return h("div", { class: "nav", style: "flex:none;gap:var(--space-4);flex-wrap:nowrap;overflow:hidden" },
       h("span", { class: "nav-brand", style: "display:flex;align-items:center;gap:10px;letter-spacing:0.02em;flex:none;white-space:nowrap;margin-right:0" },
-        h("span", { style: "width:12px;height:12px;background:var(--color-accent);display:block" }), "PICOTTY SWARM CONTROL"),
+        h("span", { style: "width:12px;height:12px;background:var(--color-accent);display:block" }), "PICOTTY SWARM CONTROL",
+        state.hub.hub_id
+          ? h("span", { class: "tag tag-neutral", title: "The hub this dashboard is connected to (its name). Nodes may fail over between hubs; this is the one you are driving.", "data-tip-help": "failover",
+              style: "font-family:ui-monospace,Menlo,monospace;letter-spacing:0" }, "hub: " + state.hub.hub_id)
+          : null),
       ...links,
       h("div", { style: "display:flex;align-items:center;gap:var(--space-4);margin-left:auto;flex:none;white-space:nowrap" },
         showToggles ? h("button", { class: "btn btn-ghost", style: "font-size:12px", title: "Show/hide the node list rail", onClick: () => { state.leftOpen = !state.leftOpen; renderView(); } }, state.leftOpen ? "‹ Nodes" : "› Nodes") : null,
@@ -629,6 +650,7 @@
           (on ? targetBadge(n.target) : null),
           (on ? promptBadge(n.promptState) : null),
           (on ? netBadge(n) : null),
+          hubBadge(n.hubLabel),
           h("span", { style: "margin-left:auto;font-size:11px;color:var(--color-neutral-600);flex:none" }, rel(n.lastSeen))),
         h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:4px;padding-left:17px" },
           h("span", { class: "tag tag-neutral", style: "padding:1px 7px" }, n.group || "—"),
@@ -696,7 +718,8 @@
         h("span", { class: "tag " + (online ? "tag-accent" : "tag-neutral"), title: "node (Pico) link status" }, online ? "online" : "offline"),
         (online ? targetBadge(s.target, { big: true }) : null),
         (online ? promptBadge(s.promptState, { big: true }) : null),
-        (online ? netBadge(s, { big: true }) : null)),
+        (online ? netBadge(s, { big: true }) : null),
+        hubBadge(s.hubLabel, { big: true })),
       h("div", { style: "display:flex;flex-wrap:wrap;gap:2px var(--space-4);font-size:12px;color:var(--color-neutral-700);font-family:ui-monospace,Menlo,monospace;overflow:hidden" },
         h("span", {}, s.ip || ""),
         h("span", { title: "fw = the running firmware's FW_VERSION from the node's code.py — NOT the OTA bundle name. See the muted “flashed:” line for the last bundle pushed.", "data-tip-help": "ota" }, "fw " + (s.fw || "")),
@@ -738,6 +761,8 @@
       helpLink("serial-bridge", "Raw serial bridge"),
       (nodeHasOta(s) ? h("button", { class: "btn btn-secondary", title: "Push a firmware bundle to this node (chunked, checksummed, auto-revert)", disabled: !hasNode, onClick: () => openOtaSheet(s.id) }, "Firmware") : null),  // phase 12
       (nodeHasOta(s) ? helpLink("ota", "OTA firmware updates") : null),
+      h("button", { class: "btn btn-secondary", title: "Move this node between hubs or set its home/pin (dual-hub failover)", "data-tip-help": "failover", disabled: !hasNode, onClick: () => openHubSheet(s.id) }, "Hub"),      // phase 13
+      helpLink("failover", "Dual-hub failover"),
       h("button", { class: "btn btn-secondary", style: "color:var(--color-accent)", title: "Reboot the attached MACHINE / target (NOT the Pico node): serial reboot, Ctrl+Alt+Del, or Magic SysRq — each confirms first", "data-tip-help": "reboot-machine", disabled: !hasNode, onClick: () => openRebootMachineSheet(s.id) }, "Reboot machine"),
       h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", title: "Reboot the Pico NODE (NOT the target machine) — drops its socket briefly", onClick: doRebootNode }, "Reboot node"),
       helpLink("ping-read-reboot", "Reboot node")));
@@ -1487,6 +1512,62 @@
       method("Magic SysRq", "Alt+SysRq+B — immediate kernel reboot, no clean shutdown (needs kernel.sysrq on the target).", "SysRq reboot", () => rebootMachineSysrq(nodeId), true, "Fire Alt+SysRq+B on the target (confirms first)"));
     openSheet("reboot-machine", "Reboot machine — " + nodeId, body,
       [h("button", { class: "btn btn-primary", onClick: () => closeSheet("reboot-machine") }, "Close")], 560);
+  }
+
+  // ---- Dual-hub failover control (phase 13) ------------------------------
+  // Steer a node between its configured hubs. The dashboard doesn't know the
+  // node's *other* hub label, so the target is a free-text field defaulting to
+  // the opposite of the node's current hub_label. Every action POSTs to
+  // /nodes/{id}/hub and surfaces the ok/error via a toast, then re-fetches the
+  // node so its "via <label>" badge reflects the move.
+  async function refetchNode(id) {
+    try {
+      const r = await getJSON("/nodes/" + encodeURIComponent(id));
+      const n = r && r.node;
+      const rec = findNode(id);
+      if (rec && n && n.id) Object.assign(rec, apiNodeToRec(n));
+      if (state.view === "nodes") { renderNodeList(); if (id === state.selId && ui.header) renderHeaderInto(ui.header); }
+    } catch (e) { /* offline / gone — leave the last-known record */ }
+  }
+  async function sendHubDirective(nodeId, action, target) {
+    if (state.demo) {   // reflect the intent locally so the demo UI responds
+      const rec = findNode(nodeId);
+      if (rec && action !== "unpin") rec.hubLabel = target;
+      renderNodeList(); if (nodeId === state.selId && ui.header) renderHeaderInto(ui.header);
+      toast("Hub", nodeId + " · " + action + (target ? " → " + target : "")); closeSheet("hub-sheet"); return;
+    }
+    const body = { action };
+    if (action !== "unpin") body.target = target;
+    const r = await apiSoft("POST", "/nodes/" + encodeURIComponent(nodeId) + "/hub", body);
+    if (r.ok) {
+      toast("Hub", nodeId + " · " + (action === "unpin" ? "pin released" : action + " → " + target));
+      closeSheet("hub-sheet");
+      refetchNode(nodeId);
+    } else {
+      toast("Failed", r.detail || r.error || "hub directive rejected");
+    }
+  }
+  function openHubSheet(nodeId) {
+    const node = findNode(nodeId) || {};
+    const cur = node.hubLabel || null;
+    const dflt = otherHubLabel(cur);
+    const target = h("input", { class: "input", value: dflt, style: "font-family:ui-monospace,Menlo,monospace",
+      title: "Label of the destination hub, as the node knows it (e.g. primary / backup). The node ignores a hub it isn't configured for.", "data-tip-help": "failover" });
+    const tval = () => target.value.trim();
+    const guardTarget = (fn) => () => { const t = tval(); if (!t) { toast("Failed", "a target hub label is required"); target.focus(); return; } fn(t); };
+    const action = (label, desc, btnLabel, onClick, ghost) => h("div", { style: "display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--color-divider)" },
+      h("div", { style: "flex:1;min-width:0" }, h("div", { style: "font-size:13px;font-weight:600" }, label), h("div", { style: "font-size:12px;color:var(--color-neutral-700);margin-top:2px" }, desc)),
+      h("button", { class: "btn " + (ghost ? "btn-ghost" : "btn-secondary"), style: "flex:none", onClick }, btnLabel));
+    const body = h("div", { style: "display:flex;flex-direction:column;gap:4px" },
+      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Steer ", h("b", {}, nodeId), " between its configured hubs. It currently reached us via ",
+        h("b", {}, cur || "an unlabelled / single hub"), ". Enter the destination hub's label — the node only honours a hub it is configured for."),
+      h("div", { class: "field", style: "padding:10px 0;border-bottom:1px solid var(--color-divider)" }, h("label", {}, "Target hub label"), target),
+      action("Move now", "One-shot switch to the target hub. Preference is unchanged — failover can move it back.", "Move", guardTarget((t) => sendHubDirective(nodeId, "switch", t))),
+      action("Set as home hub", "Make the target the node's preferred/home hub AND move now (persisted).", "Set home", guardTarget((t) => sendHubDirective(nodeId, "prefer", t))),
+      action("Pin to hub", "Lock the node to the target and ignore failover, moving now (persisted).", "Pin", guardTarget((t) => sendHubDirective(nodeId, "pin", t))),
+      action("Unpin", "Release a pin so the node can fail over again. No target needed.", "Unpin", () => sendHubDirective(nodeId, "unpin", null), true));
+    openSheet("hub-sheet", "Hub — " + nodeId, body,
+      [h("button", { class: "btn btn-primary", onClick: () => closeSheet("hub-sheet") }, "Close")], 560);
   }
 
   // ---- Custom key chords (dedicated editor, separate from macros) ---------
@@ -2293,7 +2374,7 @@
   function onEvent(ev) {
     switch (ev.event) {
       case "hub_stats":
-        state.hub.uptime_ms = ev.uptime_ms; state.hub.nodes_online = ev.nodes_online; state.hub.nodes_total = ev.nodes_total; refreshNav(); break;
+        state.hub.uptime_ms = ev.uptime_ms; state.hub.nodes_online = ev.nodes_online; state.hub.nodes_total = ev.nodes_total; if (ev.hub_id != null) state.hub.hub_id = ev.hub_id; refreshNav(); break;
       case "node_up": {
         const meta = ev.meta || {}; let n = findNode(ev.id);
         const rec = mergeMeta(n, meta, ev.id);
@@ -2313,7 +2394,7 @@
       }
       case "node_down": { const n = findNode(ev.id); if (n) n.status = "offline"; if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) { renderHeaderInto(ui.header); rebuildComposerState(); } } recomputeFleet(); break; }
       case "node_updated": { const n = findNode(ev.id); if (n) { if (ev.label != null) n.label = ev.label; if (ev.group != null) n.group = ev.group; if (ev.status) n.status = ev.status; } if (state.view === "nodes") renderNodeList(); break; }
-      case "heartbeat": { const n = findNode(ev.id); if (n) { n.lastSeen = ev.ts || now(); if (ev.rtt_ms != null) n.rttMs = ev.rtt_ms; if (ev.target != null) n.target = ev.target; if (ev.node_uptime_ms != null) n.nodeUptimeMs = ev.node_uptime_ms; } if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) renderHeaderInto(ui.header); } break; }
+      case "heartbeat": { const n = findNode(ev.id); if (n) { n.lastSeen = ev.ts || now(); if (ev.rtt_ms != null) n.rttMs = ev.rtt_ms; if (ev.target != null) n.target = ev.target; if (ev.hub_label !== undefined) n.hubLabel = ev.hub_label; if (ev.node_uptime_ms != null) n.nodeUptimeMs = ev.node_uptime_ms; } if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId) renderHeaderInto(ui.header); } break; }
       case "node_net": { const n = findNode(ev.id); if (n) { if (ev.rtt_ms != null) n.rttMs = ev.rtt_ms; n.rttAvgMs = ev.rtt_avg_ms; n.jitterMs = ev.jitter_ms; n.lossPct = ev.loss_pct; } if (state.view === "nodes") { renderNodeList(); if (ev.id === state.selId && ui.header) renderHeaderInto(ui.header); } break; }
       case "command_issued": { const n = findNode(ev.id); if (n) n.inflight = (n.inflight || 0) + 1; if (state.view === "nodes") renderNodeList(); break; }
       case "result": {
@@ -2373,6 +2454,7 @@
     rec.promptState = meta.prompt_state != null ? meta.prompt_state : rec.promptState;
     rec.target = meta.target != null ? meta.target : (rec.target || "unknown");
     rec.lastOta = meta.last_ota != null ? meta.last_ota : (rec.lastOta || null);
+    rec.hubLabel = meta.hub_label != null ? meta.hub_label : (rec.hubLabel != null ? rec.hubLabel : null);
     rec.lastSeen = meta.last_seen || now();
     rec.inflight = meta.inflight || 0;
     if (meta.rtt_avg_ms !== undefined) rec.rttAvgMs = meta.rtt_avg_ms;
@@ -2393,11 +2475,12 @@
     return { id: n.id, label: n.label || "", group: n.group || "", ip: n.ip || "", fw: n.fw_version || "",
       status: n.status, rttMs: n.rtt_ms, caps: (n.capabilities || []).join(","), lastSeen: n.last_seen || now(), inflight: n.inflight || 0,
       layout: n.layout || "us", promptState: n.prompt_state || null, target: n.target || "unknown", lastOta: n.last_ota || null,
+      hubLabel: n.hub_label != null ? n.hub_label : null,
       rttAvgMs: n.rtt_avg_ms, jitterMs: n.jitter_ms, lossPct: n.loss_pct, nodeUptimeMs: n.node_uptime_ms, reconnects: n.reconnects || 0 };
   }
   async function loadLive() {
     const health = await getJSON("/health");
-    state.hub.uptime_ms = health.uptime_ms; state.hub.version = health.version;
+    state.hub.uptime_ms = health.uptime_ms; state.hub.version = health.version; state.hub.hub_id = health.hub_id || "";
     state.hub.bind = health.bind; state.hub.swarm_port = health.swarm_port; state.hub.web_port = health.web_port;
     state.hub.nodes_online = health.nodes_online; state.hub.nodes_total = health.nodes_total;
     const [nodes, macros, settings, events, bridge, runbooks, bundles, chords] = await Promise.all([
@@ -2425,11 +2508,11 @@
   // `demo.json` next to this file; otherwise this generic placeholder set is used.
   // The shared source therefore stays free of node names, IPs, and credentials.
   const GENERIC_DEMO = {
-    hub: { uptime_ms: 3 * 3600e3, bind: "hub.local", swarm_port: 9000, web_port: 8080, version: "demo" },
+    hub: { uptime_ms: 3 * 3600e3, bind: "hub.local", swarm_port: 9000, web_port: 8080, version: "demo", hub_id: "hub-demo" },
     settings: { heartbeat_interval_ms: 5000, stale_timeout_ms: 15000, output_retention_days: 30, event_retention_days: 90, require_confirm_dangerous: true },
     nodes: [
-      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.2.0", status: "online", rttMs: 3, rttAvgMs: 3, jitterMs: 1, lossPct: 0, nodeUptimeMs: 5 * 86400e3, reconnects: 0, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login", target: "up", lastOta: "fw-1.1.0 @ 1699900000000" },
-      { id: "node-02", label: "example target two (flaky link)", group: "group-a", ip: "10.0.0.12", fw: "1.2.0", status: "online", rttMs: 22, rttAvgMs: 18, jitterMs: 55, lossPct: 6, nodeUptimeMs: 3 * 3600e3, reconnects: 4, ageMs: 4000, caps: "hid,cdc,serial_tx,ota", layout: "de", promptState: "shell", target: "down" },
+      { id: "node-01", label: "example target one", group: "group-a", ip: "10.0.0.11", fw: "1.2.0", status: "online", rttMs: 3, rttAvgMs: 3, jitterMs: 1, lossPct: 0, nodeUptimeMs: 5 * 86400e3, reconnects: 0, ageMs: 2000, caps: "hid,cdc,serial_tx,ota", layout: "us", promptState: "login", target: "up", lastOta: "fw-1.1.0 @ 1699900000000", hubLabel: "primary" },
+      { id: "node-02", label: "example target two (flaky link)", group: "group-a", ip: "10.0.0.12", fw: "1.2.0", status: "online", rttMs: 22, rttAvgMs: 18, jitterMs: 55, lossPct: 6, nodeUptimeMs: 3 * 3600e3, reconnects: 4, ageMs: 4000, caps: "hid,cdc,serial_tx,ota", layout: "de", promptState: "shell", target: "down", hubLabel: "backup" },
       { id: "node-03", label: "example target three (old fw)", group: "group-b", ip: "10.0.0.13", fw: "0.9.4", status: "offline", rttMs: null, ageMs: 8600e3, caps: "hid,cdc", layout: "us", promptState: null },
     ],
     consoles: {
@@ -2465,14 +2548,14 @@
   }
 
   function applyDemo(d) {
-    state.hub = Object.assign({ uptime_ms: 0, bind: "", swarm_port: 9000, web_port: 8080, version: "demo" }, d.hub || {});
+    state.hub = Object.assign({ uptime_ms: 0, bind: "", swarm_port: 9000, web_port: 8080, version: "demo", hub_id: "hub-demo" }, d.hub || {});
     state.settings = d.settings || {};
     state.nodes = (d.nodes || []).map((n) => ({
       id: n.id, label: n.label || "", group: n.group || "", ip: n.ip || "", fw: n.fw || "",
       status: n.status || "online", rttMs: n.rttMs != null ? n.rttMs : null, caps: n.caps || "hid,cdc",
       lastSeen: now() - (n.ageMs || 0), inflight: 0,
       layout: n.layout || "us", promptState: n.promptState != null ? n.promptState : null, target: n.target || "unknown",
-      lastOta: n.lastOta != null ? n.lastOta : null,
+      lastOta: n.lastOta != null ? n.lastOta : null, hubLabel: n.hubLabel != null ? n.hubLabel : null,
       rttAvgMs: n.rttAvgMs, jitterMs: n.jitterMs, lossPct: n.lossPct, nodeUptimeMs: n.nodeUptimeMs, reconnects: n.reconnects || 0,
     }));
     state.chords = (d.chords || []).map((c) => ({ id: c.id, label: c.label, chord: c.chord || [] }));

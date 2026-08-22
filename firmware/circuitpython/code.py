@@ -21,9 +21,10 @@ from netlink import NetLink
 from backchannel import BackChannel
 from injector import Injector, InjectError
 from wire import FrameReader, ProtocolError, encode
+from hubselect import HubSelector
 import messages
 
-FW_VERSION = "1.2.0"
+FW_VERSION = "1.3.0"
 
 # Editing files on the CIRCUITPY drive must not yank a running node into a reload
 # mid-command. We reload deliberately (on a reboot command), never by surprise.
@@ -215,10 +216,13 @@ def setup_hid(cfg):
 
 # --- command dispatch (hub -> node) ------------------------------------------
 
-def dispatch(msg, net, injector, backchannel, state, cfg, ota=None):
+def dispatch(msg, net, injector, backchannel, state, cfg, ota=None, selector=None):
     """Handle one hub->node message. Command replies (result/pong/error) go back
     down the same socket. A link error while replying propagates up to trigger a
-    reconnect; a command-level failure becomes a 'failed' result, not a crash."""
+    reconnect; a command-level failure becomes a 'failed' result, not a crash.
+
+    A moving hub_directive raises ConnectionError to leave the session so the
+    outer loop redials the chosen hub."""
     t = msg.get("type")
     cmd_id = msg.get("cmd_id")
 
@@ -288,6 +292,30 @@ def dispatch(msg, net, injector, backchannel, state, cfg, ota=None):
             state.heartbeat_ms = hb
         # config carries no cmd_id and expects no result.
 
+    elif t == "welcome":
+        # The hub identifies itself right after auth, so the node knows which hub
+        # it actually reached. Advisory; carries no cmd_id.
+        if selector is not None:
+            selector.note_hub_id(msg.get("hub_id"))
+
+    elif t == "hub_directive":
+        # Runtime steering: move to / prefer / pin / unpin a configured hub.
+        action = msg.get("action")
+        target = msg.get("target")
+        ok = selector is not None and selector.apply_directive(action, target)
+        if cmd_id is not None:
+            net.send(encode(messages.result(
+                cmd_id, "ok" if ok else "failed",
+                None if ok else "unknown hub/action: %r %r" % (action, target))))
+        if ok and action in ("switch", "prefer", "pin"):
+            # Leave this session so the outer loop dials the chosen hub.
+            try:
+                net.send(encode(messages.bye()))
+            except Exception:
+                pass
+            net.close()
+            raise ConnectionError("hub directive: %s -> %s" % (action, target))
+
     elif t == "reboot":
         try:
             net.send(encode(messages.bye()))
@@ -347,7 +375,7 @@ def dispatch(msg, net, injector, backchannel, state, cfg, ota=None):
 
 # --- session loop ------------------------------------------------------------
 
-def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
+def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None, selector=None):
     """Run until the connection drops (which surfaces as a raised exception)."""
     scratch = bytearray(512)
     mv = memoryview(scratch)
@@ -378,7 +406,7 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
                     raise ConnectionError("protocol error")
                 if incoming is None:
                     break
-                dispatch(incoming, net, injector, backchannel, state, cfg, ota)
+                dispatch(incoming, net, injector, backchannel, state, cfg, ota, selector)
                 did_work = True
 
         # 2) Outbound target serial output, bounded per pass.
@@ -409,8 +437,10 @@ def run_session(net, reader, injector, backchannel, state, cfg, wdt, ota=None):
         if now - last_hb >= state.heartbeat_ms * 1_000_000:
             # Carry target-machine liveness (USB host present) so the hub can show
             # whether the attached MACHINE is up, distinct from the node itself,
-            # plus our own uptime so the hub can spot an unannounced node reboot.
-            net.send(encode(messages.heartbeat(cfg.node_id, host_present(), mono_ms())))
+            # plus our own uptime so the hub can spot an unannounced node reboot,
+            # and the label of the hub we're on so the dashboard knows the source.
+            hub_label = selector.active_label if selector is not None else None
+            net.send(encode(messages.heartbeat(cfg.node_id, host_present(), mono_ms(), hub_label)))
             last_hb = now
             # Reaching a heartbeat means we booted, networked, connected, and ran
             # the loop — healthy enough to finalize a pending OTA update (drop the
@@ -520,6 +550,9 @@ def main():
 
     state = State(cfg.heartbeat_ms)
     reader = FrameReader(cfg.max_frame_bytes)
+    selector = HubSelector(cfg)
+    if selector.has_backup:
+        print("failover enabled; hubs:", [h["label"] for h in cfg.hubs])
     backoff = cfg.backoff_start_ms
     boot_watchdog = was_watchdog_reset()
     reported_reset = False
@@ -529,16 +562,21 @@ def main():
 
     while True:
         reached_hub = False
+        # Pick the hub to dial (primary, backup, or a runtime-chosen target) and
+        # point the transport at it.
+        hub_label = selector.next_target()
         try:
             STATUS.set("connecting")
             feed(wdt)
-            print("connecting to hub", cfg.hub_host, cfg.hub_port)
+            print("connecting to hub", hub_label, cfg.hub_host, cfg.hub_port)
             net.connect()
             reached_hub = True  # TCP connect succeeded — the network is good
             connect_fails = 0
+            selector.on_connected()
             reader.reset()
             backchannel.reset_tx()  # abandon any serial writes left from a dropped link
-            net.send(encode(messages.hello(cfg.node_id, cfg.token, FW_VERSION, cap, layout_name)))
+            net.send(encode(messages.hello(
+                cfg.node_id, cfg.token, FW_VERSION, cap, layout_name, selector.active_label)))
             print("connected; hello sent")
             if boot_watchdog and not reported_reset:
                 # Surface a prior hang in the hub's Events feed, since there is no
@@ -547,13 +585,16 @@ def main():
                 reported_reset = True
             backoff = cfg.backoff_start_ms  # reset backoff on a good connect
             STATUS.set("online")
-            run_session(net, reader, injector, backchannel, state, cfg, wdt, ota)
+            run_session(net, reader, injector, backchannel, state, cfg, wdt, ota, selector)
         except (ConnectionError, OSError, RuntimeError, ProtocolError) as e:
             print("link down:", e)
             # A drop AFTER a successful connect means the network is fine (the hub
             # or link went away); only count attempts that never reached the hub.
+            # A never-reached hub also advances the failover selector toward the
+            # next candidate.
             if not reached_hub:
                 connect_fails += 1
+                selector.on_failed()
         finally:
             net.close()
 

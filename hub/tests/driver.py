@@ -35,10 +35,13 @@ class DriverNode:
         self.inbox = asyncio.Queue()
         self._pump = None
 
-    async def connect(self):
+    async def connect(self, hub=None):
         self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
-        await self.send({"type": "hello", "id": self.node_id, "token": self.token,
-                         "fw": "test", "cap": self.caps, "layout": self.layout})
+        hello = {"type": "hello", "id": self.node_id, "token": self.token,
+                 "fw": "test", "cap": self.caps, "layout": self.layout}
+        if hub is not None:
+            hello["hub"] = hub   # which configured hub this node dialed (failover)
+        await self.send(hello)
         self._pump = asyncio.create_task(self._reader_pump())
 
     async def _reader_pump(self):

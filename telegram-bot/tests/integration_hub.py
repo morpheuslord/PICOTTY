@@ -157,6 +157,33 @@ async def run() -> int:
         res = await client.send_serial("sim-tg", raw="03")   # Ctrl-C
         record("control key (raw hex) accepted", res.get("ok", True) is True)
 
+        # NEW read-only ops SDK: events / output / search / ping ------------
+        events = await client.events(limit=10)
+        record("SDK events()", isinstance(events, list) and len(events) > 0,
+               "%d events" % len(events))
+        chunks = await client.node_output("sim-tg", limit=50)
+        record("SDK node_output()", isinstance(chunks, list))
+        matches = await client.output_search("whoami", limit=20)
+        record("SDK output_search()", isinstance(matches, list) and len(matches) > 0,
+               "%d matches" % len(matches))
+        pres = await client.ping("sim-tg")
+        record("SDK ping()", pres.get("ok") is True, "rtt=%sms" % pres.get("rtt_ms"))
+
+        # NEW fleet SDK: bulk / macros / runbooks --------------------------
+        bulk = await client.bulk_cmd(["sim-tg"], {"type": "send", "data": "id\r"})
+        record("SDK bulk_cmd()", bulk.get("ok") is True and len(bulk.get("dispatched", [])) == 1,
+               str(bulk.get("dispatched")))
+        macros = await client.macros()
+        record("SDK macros()", isinstance(macros, list))
+        rbs = await client.runbooks()
+        record("SDK runbooks()", isinstance(rbs, list))
+
+        # NEW dual-hub SDK: a directive is accepted for an online node ------
+        hd = await client.hub_directive("sim-tg", "prefer", "backup")
+        record("SDK hub_directive()", hd.get("ok") is True, str(hd))
+        hbad = await client.hub_directive("sim-tg", "bogus", "x")
+        record("SDK hub_directive rejects bad action", hbad.get("ok") is False)
+
         # alert on node death ----------------------------------------------
         sim.terminate()
         await _wait(lambda: any("offline" in h.lower() for h in captured_alerts), timeout=8)

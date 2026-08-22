@@ -23,6 +23,7 @@ throughout, a hardware watchdog, and full coverage of every message type.
 | `wire.py` | Length-prefixed JSON framing and a bounded frame reader. |
 | `messages.py` | Builders for every node→hub message. |
 | `nodeconfig.py` | Loads and validates `settings.toml`. |
+| `hubselect.py` | Dual-hub failover: picks primary/backup, rotates on failure, applies runtime steering directives. Pure logic, host-testable. |
 | `otaflash.py` | Over-the-wire firmware update machinery (checksummed push, `.bak` + watchdog-revert). Wired into `code.py`/`boot.py` behind the `ota` capability — see the OTA note below. |
 | `settings.toml.example` | Copy to `settings.toml` and edit per node. |
 
@@ -70,7 +71,7 @@ To change the pins, edit the constants at the top of `netlink.py`.
 
 3. **Copy the firmware.** Copy every file in this directory to the root of the
    `CIRCUITPY` drive: `boot.py`, `code.py`, `netlink.py`, `injector.py`,
-   `backchannel.py`, `wire.py`, `messages.py`, `nodeconfig.py`.
+   `backchannel.py`, `wire.py`, `messages.py`, `nodeconfig.py`, `hubselect.py`.
 
 4. **Configure the node.** Copy `settings.toml.example` to `settings.toml` on the
    drive and edit at least `NODE_ID`, `NODE_TOKEN`, and `HUB_IP`. Because `boot.py`

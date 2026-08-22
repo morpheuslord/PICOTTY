@@ -4,19 +4,25 @@
 # read. Each returns a plain dict; wire.encode turns it into a frame.
 
 
-def hello(node_id, token, fw, cap, layout=None):
+def hello(node_id, token, fw, cap, layout=None, hub=None):
     """Sent once on connect. The hub validates `token` before anything else.
 
     `layout` is the active keyboard layout code (e.g. "us", "de"); the hub keeps
     it as read-only node detail. Omitted by old firmware, which the hub treats as
-    unknown/US."""
+    unknown/US.
+
+    `hub` is the configured LABEL of the hub this node just dialed (e.g. "primary"
+    or "backup"). It lets a hub log which of its aliases a node reached, and lets
+    the dashboard show where a board landed. Omitted by single-hub/old firmware."""
     msg = {"type": "hello", "id": node_id, "token": token, "fw": fw, "cap": cap}
     if layout is not None:
         msg["layout"] = layout
+    if hub is not None:
+        msg["hub"] = hub
     return msg
 
 
-def heartbeat(node_id, host=None, up=None):
+def heartbeat(node_id, host=None, up=None, hub=None):
     """Liveness pulse on the heartbeat interval. Not persisted per beat.
 
     `host` reports whether the TARGET machine's USB host has us enumerated — a
@@ -27,12 +33,17 @@ def heartbeat(node_id, host=None, up=None):
 
     `up` is the node's firmware uptime in ms (monotonic since boot). The hub
     shows it and watches for it jumping backwards, which flags an unannounced
-    node reboot. Omitted by old firmware, which the hub treats as unknown."""
+    node reboot. Omitted by old firmware, which the hub treats as unknown.
+
+    `hub` is the label of the hub this node is currently connected to, so a
+    dashboard always knows which hub owns the board even between hellos."""
     msg = {"type": "heartbeat", "id": node_id}
     if host is not None:
         msg["host"] = bool(host)
     if up is not None:
         msg["up"] = int(up)
+    if hub is not None:
+        msg["hub"] = hub
     return msg
 
 
