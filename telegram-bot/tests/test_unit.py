@@ -59,12 +59,100 @@ def test_config_ws_url_derivation():
     os.environ["TELEGRAM_BOT_TOKEN"] = "x:y"
     os.environ["TELEGRAM_ALLOWED_CHAT_IDS"] = "12"
     os.environ["SHELL_ENABLED"] = "false"
+    os.environ.pop("HUB_BASE_URL_BACKUP", None)
     os.environ["HUB_BASE_URL"] = "http://10.0.0.5:8080"
     cfg = config.load()
     assert cfg.ws_url == "ws://10.0.0.5:8080/ws", cfg.ws_url
     os.environ["HUB_BASE_URL"] = "https://hub.example:8443"
     cfg = config.load()
     assert cfg.ws_url == "wss://hub.example:8443/ws", cfg.ws_url
+
+
+def test_config_hub_endpoints_single_and_dual():
+    os.environ["TELEGRAM_BOT_TOKEN"] = "x:y"
+    os.environ["TELEGRAM_ALLOWED_CHAT_IDS"] = "12"
+    os.environ["SHELL_ENABLED"] = "false"
+    os.environ["HUB_BASE_URL"] = "http://10.0.0.5:8080"
+    os.environ.pop("HUB_BASE_URL_BACKUP", None)
+    cfg = config.load()
+    assert cfg.hub_endpoints == [("http://10.0.0.5:8080", "ws://10.0.0.5:8080/ws")], cfg.hub_endpoints
+    # With a backup, failover has two endpoints, ws derived for each.
+    os.environ["HUB_BASE_URL_BACKUP"] = "http://10.0.0.9:8080"
+    cfg = config.load()
+    eps = cfg.hub_endpoints
+    assert len(eps) == 2 and eps[0][0] == "http://10.0.0.5:8080" and eps[1] == ("http://10.0.0.9:8080", "ws://10.0.0.9:8080/ws"), eps
+    os.environ.pop("HUB_BASE_URL_BACKUP", None)
+
+
+def test_failover_hub_advances_on_conn_error():
+    import httpx
+    from app.hubfailover import FailoverHub
+
+    class FakeClient:
+        def __init__(self, name, fail):
+            self.name, self.fail, self.calls = name, fail, 0
+
+        async def health(self):
+            self.calls += 1
+            if self.fail:
+                raise httpx.ConnectError("down")
+            return {"ok": True, "who": self.name}
+
+        async def aclose(self):
+            pass
+
+    fh = FailoverHub([("http://a", "ws://a/ws"), ("http://b", "ws://b/ws")], timeout=1)
+    fh._clients = [FakeClient("a", True), FakeClient("b", False)]
+
+    async def run():
+        r = await fh.health()               # a is down -> fails over to b
+        assert r["who"] == "b", r
+        assert fh.current_base == "http://b", fh.current_base
+        # b is sticky now; a subsequent call stays on b (no needless flap).
+        r2 = await fh.health()
+        assert r2["who"] == "b"
+
+    asyncio.run(run())
+
+
+def test_failover_hub_select_source():
+    from app.hubfailover import FailoverHub
+    fh = FailoverHub([("http://main:8080", "ws://main:8080/ws"),
+                      ("http://back:8080", "ws://back:8080/ws")], timeout=1)
+    assert fh.active_label == "primary" and fh.current_base == "http://main:8080"
+    # by label
+    assert fh.select("backup") == "http://back:8080" and fh.active_label == "backup"
+    assert fh.select("primary") == "http://main:8080"
+    # by 1-based index and by URL substring
+    assert fh.select("2") == "http://back:8080"
+    assert fh.select("main") == "http://main:8080"
+    # unknown -> None, current unchanged
+    assert fh.select("nope") is None and fh.current_base == "http://main:8080"
+    st = fh.endpoints_status()
+    assert st[0]["label"] == "primary" and st[0]["active"] is True and st[1]["active"] is False
+
+
+def test_failover_hub_all_down_raises():
+    import httpx
+    from app.hubfailover import FailoverHub
+
+    class Dead:
+        async def health(self):
+            raise httpx.ConnectError("down")
+        async def aclose(self):
+            pass
+
+    fh = FailoverHub([("http://a", "ws://a/ws"), ("http://b", "ws://b/ws")], timeout=1)
+    fh._clients = [Dead(), Dead()]
+
+    async def run():
+        try:
+            await fh.health()
+        except httpx.ConnectError:
+            return
+        raise AssertionError("expected ConnectError when all hubs are down")
+
+    asyncio.run(run())
 
 
 # -- security / TOTP ----------------------------------------------------------

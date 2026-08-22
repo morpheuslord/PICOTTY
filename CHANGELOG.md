@@ -52,12 +52,44 @@ Surfaced hub capabilities that were REST-ready but had no chat command:
   `ping`, `bulk_cmd`, `macros`/`run_macro`, `runbooks`/`run_runbook`,
   `hub_directive`), so any client — not just the bot — can use them.
 
+### Added — cross-hub takeover & peer visibility
+
+A board holds one hub connection at a time, so only the hub that holds it can
+steer it. New **`HUB_PEERS`** (comma-separated peer hub URLs) closes the gap:
+
+- **Peer visibility.** Each hub polls its peers' rosters and shows a board that's
+  live on the other hub as **"active on `<peer>`"** (a badge) instead of offline —
+  even a board it has never seen.
+- **On-demand takeover from either hub.** Steering a board the hub doesn't hold
+  **relays** the directive to the peer that does, which delivers it — so you can
+  pull a board to the backup from the backup's own dashboard while it's still on
+  the primary. Relayed calls are never relayed again (loop-safe). Peer calls
+  assume a trusted management VLAN (no auth), matching the node-token posture.
+
+### Added — Telegram sidecar dual-hub
+
+- **The bot fails over between hubs.** Set `HUB_BASE_URL_BACKUP` and the sidecar
+  prefers the primary hub, failing over to the backup (REST + the live event
+  stream) so the phone control plane survives a hub outage.
+- **`/source [primary|backup]`** picks which hub the bot acts on (distinct from
+  `/hub`, which steers an individual board). Telegram permits only one active
+  receiver per token, so the intended HA is: run the same bot on both hosts with
+  one enabled and the other a hot spare — see [docs/dual-hub.md](docs/dual-hub.md).
+
+### Fixed — responsive dashboard
+
+The dashboard (a fixed-width desktop layout) now adapts to phones, tablets, and
+any window aspect ratio: the side rails are fluid on desktop and the three columns
+stack with the console kept usably tall on narrow screens, with the page scrolling
+instead of clipping. CSS-only; no behavior change.
+
 ### Verified
 
-Firmware selector 12/12 host unit checks; hub 7/7 db + **58/58** integration
-(incl. welcome frame, hub-label surfacing, and the directive endpoint); sidecar
-**23/23** unit + wiring smoke + **18/18** end-to-end against a real hub through
-`picotty.client` (incl. every new SDK method). No regressions.
+Firmware selector **12/12** host unit; hub 7/7 db + **58/58** integration (welcome
+frame, hub-label, directive endpoint) + **5/5** two-hub relay (cross-hub takeover,
+peer visibility, loop guard); sidecar **27/27** unit (incl. hub-failover + source
+select) + wiring smoke + **18/18** end-to-end through `picotty.client`. No
+regressions.
 
 ## v1.0.3 — 2026-08-12
 

@@ -92,7 +92,13 @@ class EventRelay:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                pass
+                # The hub or link bounced. Probe REST health — on a FailoverHub
+                # this fails over to a live hub (advancing it), so the next WS
+                # connect targets an up hub. On a single hub it's a harmless probe.
+                try:
+                    await self._hub.health()
+                except Exception:
+                    pass
             finally:
                 async with self._stream_lock:
                     self._stream = None

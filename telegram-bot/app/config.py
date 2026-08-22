@@ -41,6 +41,16 @@ def _bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _derive_ws(base_url: str) -> str:
+    """ws(s):// URL for a hub's /ws from its http(s):// base."""
+    base = base_url.rstrip("/")
+    if base.startswith("https://"):
+        return "wss://" + base[len("https://"):] + "/ws"
+    if base.startswith("http://"):
+        return "ws://" + base[len("http://"):] + "/ws"
+    return "ws://" + base + "/ws"
+
+
 def _chat_ids(name: str) -> frozenset[int]:
     """Parse a comma-separated allowlist of numeric chat IDs. Non-numeric
     entries are rejected loudly — a typo here must not silently widen access."""
@@ -69,6 +79,11 @@ class Config:
     # -- Hub REST + WebSocket -------------------------------------------------
     hub_base_url: str = "http://127.0.0.1:8080"
     hub_ws_url: str = ""            # derived from hub_base_url if blank
+    # Optional BACKUP hub (dual-hub). When set, the sidecar fails over to it if the
+    # primary hub is unreachable — the phone control plane survives a hub going
+    # down, mirroring the boards' failover. Blank = single hub (unchanged).
+    hub_base_url_backup: str = ""
+    hub_ws_url_backup: str = ""     # derived from hub_base_url_backup if blank
     hub_auth_password: str = ""     # only if the hub has auth_enabled
     hub_timeout_s: float = 10.0
 
@@ -100,14 +115,17 @@ class Config:
 
     @property
     def ws_url(self) -> str:
-        if self.hub_ws_url:
-            return self.hub_ws_url
-        base = self.hub_base_url.rstrip("/")
-        if base.startswith("https://"):
-            return "wss://" + base[len("https://"):] + "/ws"
-        if base.startswith("http://"):
-            return "ws://" + base[len("http://"):] + "/ws"
-        return "ws://" + base + "/ws"
+        return self.hub_ws_url or _derive_ws(self.hub_base_url)
+
+    @property
+    def hub_endpoints(self) -> list[tuple[str, str]]:
+        """(base_url, ws_url) for each hub the sidecar may talk to, primary first.
+        A single entry unless HUB_BASE_URL_BACKUP is set (dual-hub failover)."""
+        eps = [(self.hub_base_url, self.ws_url)]
+        if self.hub_base_url_backup:
+            eps.append((self.hub_base_url_backup,
+                        self.hub_ws_url_backup or _derive_ws(self.hub_base_url_backup)))
+        return eps
 
 
 def load() -> Config:
@@ -135,6 +153,8 @@ def load() -> Config:
         allowed_chat_ids=chat_ids,
         hub_base_url=_str("HUB_BASE_URL", "http://127.0.0.1:8080"),
         hub_ws_url=_str("HUB_WS_URL"),
+        hub_base_url_backup=_str("HUB_BASE_URL_BACKUP"),
+        hub_ws_url_backup=_str("HUB_WS_URL_BACKUP"),
         hub_auth_password=_str("HUB_AUTH_PASSWORD"),
         hub_timeout_s=float(_int("HUB_TIMEOUT_S", 10)),
         alerts_enabled=_bool("ALERTS_ENABLED", True),

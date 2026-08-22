@@ -83,6 +83,12 @@ async def list_nodes(request: Request, status: str = None, group: str = None,
     hub = hub_of(request)
     rows = await hub.db.list_nodes()
     nodes = [hub.merge_node(r) for r in rows]
+    # Dual-hub: also surface boards this hub has never seen but a peer holds now,
+    # so a backup shows the whole fleet as active-on-peer (and can steer them).
+    present = {n["id"] for n in nodes}
+    for nid in hub.peer_nodes:
+        if nid not in present:
+            nodes.append(hub.merge_peer_only(nid))
 
     if status in ("online", "offline"):
         nodes = [n for n in nodes if n["status"] == status]
@@ -104,6 +110,10 @@ async def get_node(request: Request, node_id: str):
     hub = hub_of(request)
     row = await hub.db.get_node(node_id)
     if not row:
+        # A board this hub never saw but a peer holds now (dual-hub): report it as
+        # active-on-peer so it can be viewed and steered from here.
+        if node_id in hub.peer_nodes:
+            return {"ok": True, "node": hub.merge_peer_only(node_id)}
         return err("not_found", "no such node %s" % node_id)
     return {"ok": True, "node": hub.merge_node(row)}
 
@@ -209,7 +219,9 @@ async def post_hub_directive(request: Request, node_id: str, body: HubDirective)
     target = (body.target or "").strip() or None
     if action != "unpin" and not target:
         return err("bad_target", "a target hub label is required for %s" % action)
-    return await hub.send_hub_directive(node_id, action, target)
+    # A relayed call (from a peer hub) carries this header; don't relay it again.
+    allow_relay = request.headers.get("x-picotty-relay") != "1"
+    return await hub.send_hub_directive(node_id, action, target, allow_relay=allow_relay)
 
 
 @router.post("/nodes/{node_id}/sysrq")

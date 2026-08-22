@@ -24,6 +24,17 @@ def _default_hub_id() -> str:
     except Exception:
         return os.environ.get("HUB_ID") or "hub"
 
+
+def _hub_peers() -> tuple:
+    """Base URLs of the OTHER hubs in a dual-hub deployment (comma-separated in
+    HUB_PEERS, e.g. "http://192.168.1.169:8080"). Used to relay a steer directive
+    to whichever peer currently holds a node, so an on-demand takeover works from
+    a hub the board isn't connected to, and to show peer-held nodes as active.
+    Assumes a trusted management VLAN (peers are called without auth), matching
+    the node-token posture."""
+    raw = os.environ.get("HUB_PEERS", "")
+    return tuple(p.strip().rstrip("/") for p in raw.split(",") if p.strip())
+
 # The installed package root (…/site-packages/picotty, or src/picotty from a
 # source tree). Static assets ship inside the package alongside the code.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -69,6 +80,10 @@ class ProcessConfig:
     # This hub's identity, advertised to nodes in the welcome frame and shown on
     # the dashboard. Distinct per hub in a dual-hub (primary/backup) deployment.
     hub_id: str = _default_hub_id()
+
+    # Peer hubs (dual-hub failover): relay steer directives to whichever peer
+    # holds a node, and surface peer-held nodes as active. Empty = standalone.
+    hub_peers: tuple = _hub_peers()
 
     tcp_host: str = os.environ.get("HUB_TCP_HOST", "0.0.0.0")
     tcp_port: int = _env_int("HUB_TCP_PORT", 9000)

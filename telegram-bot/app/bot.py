@@ -21,12 +21,11 @@ from telegram.ext import (AIORateLimiter, ApplicationBuilder,
                           CommandHandler, ContextTypes, MessageHandler,
                           TypeHandler, filters)
 
-from picotty.client import HubClient
-
 from . import formatting
 from .alertengine import AlertEngine
 from .audit import AuditLog
 from .config import Config
+from .hubfailover import FailoverHub
 from .relay import EventRelay
 from .reload import Reloader
 from .security import Security
@@ -52,6 +51,7 @@ HELP = """<b>PICOTTY hub bot</b>
 /runbooks · /runbook &lt;id&gt; &lt;node ...|all|group:NAME&gt;
 
 <b>Hubs (dual-hub failover)</b>
+/source [primary|backup] — which hub THIS bot acts on (auto-fails-over)
 /hubs — which hub each board is on
 /hub &lt;node&gt; &lt;switch|prefer|pin|unpin&gt; [target] — steer a board (armed)
 
@@ -74,7 +74,10 @@ passwords, but your typed commands are recorded here."""
 
 
 def build_application(cfg: Config):
-    hub = HubClient(cfg.hub_base_url, ws_url=cfg.ws_url, timeout=cfg.hub_timeout_s)
+    # FailoverHub talks to the primary hub and, when HUB_BASE_URL_BACKUP is set,
+    # fails over to the backup — so the bot survives a hub going down. With one
+    # hub configured it is a thin pass-through over a single HubClient.
+    hub = FailoverHub(cfg.hub_endpoints, timeout=cfg.hub_timeout_s)
     security = Security(cfg.allowed_chat_ids, cfg.shell_totp_secret, cfg.shell_arm_window_s)
     audit = AuditLog(cfg.audit_log_path)
 
@@ -498,6 +501,36 @@ def build_application(cfg: Config):
         await reply(update, "▶️ Runbook <b>%s</b> started on %d node(s) — run %s" % (
             formatting.esc(rid), len(res.get("nodes", [])), formatting.esc(str(res.get("run_id", "")))))
 
+    # ---- source hub selection (which hub THIS bot acts on) ------------------
+
+    async def cmd_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not getattr(hub, "multi", False):
+            await reply(update, "Only one hub is configured. Set <b>HUB_BASE_URL_BACKUP</b> to enable a source switch.")
+            return
+        if context.args:
+            base = hub.select(context.args[0])
+            if base is None:
+                await reply(update, "Unknown hub. Use: /source primary|backup")
+                return
+            await audit.record("source", chat_id=update.effective_chat.id, detail=context.args[0], ok=True)
+            try:
+                h = await hub.health()
+                await reply(update, "🎯 Now acting on <b>%s</b> — %s (hub_id: %s)" % (
+                    formatting.esc(hub.active_label), formatting.esc(hub.current_base),
+                    formatting.esc(str(h.get("hub_id")))))
+            except Exception as e:
+                await reply(update, "🎯 Selected <b>%s</b> (%s), but it's unreachable right now: %s" % (
+                    formatting.esc(hub.active_label), formatting.esc(hub.current_base), formatting.esc(str(e))))
+            return
+        ids = await hub.hub_ids()
+        lines = []
+        for ep in hub.endpoints_status():
+            mark = "➡️" if ep["active"] else "▫️"
+            hid = ids.get(ep["label"])
+            lines.append("%s <b>%s</b> — %s%s" % (mark, formatting.esc(ep["label"]),
+                         formatting.esc(ep["base"]), (" · " + formatting.esc(str(hid)) if hid else " · <i>unreachable</i>")))
+        await reply(update, "<b>Bot source hub</b>\n" + "\n".join(lines) + "\n\nSwitch with <b>/source primary|backup</b>.")
+
     # ---- dual-hub failover (which hub a board is on) ------------------------
 
     async def cmd_hubs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -613,6 +646,7 @@ def build_application(cfg: Config):
     app.add_handler(CommandHandler("runmacro", cmd_runmacro))
     app.add_handler(CommandHandler("runbooks", cmd_runbooks))
     app.add_handler(CommandHandler("runbook", cmd_runbook))
+    app.add_handler(CommandHandler("source", cmd_source))
     app.add_handler(CommandHandler("hubs", cmd_hubs))
     app.add_handler(CommandHandler("hub", cmd_hub))
 

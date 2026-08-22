@@ -64,7 +64,7 @@ Then in Telegram: `/status`, `/nodes`, `/uptime`, and — after `/arm <code>` �
 | Tier | Commands | Gate |
 |---|---|---|
 | **1 · Stats** | `/status` `/nodes` `/uptime [node]` | allowlist |
-| **1b · Read-only** | `/events [n]` (recent audit), `/log <node> [lines]` (recent console), `/search <text>` (search console history), `/ping <node>` (active RTT), `/hubs`, `/macros`, `/runbooks` | allowlist |
+| **1b · Read-only** | `/events [n]` (recent audit), `/log <node> [lines]` (recent console), `/search <text>` (search console history), `/ping <node>` (active RTT), `/hubs`, `/source [primary\|backup]`, `/macros`, `/runbooks` | allowlist |
 | **2 · Alerts** | node down/up, watchdog recovery, command failed, hub restart; `/mute` `/unmute` | allowlist |
 | **3 · Terminal** | `/shell [node]`, plain text → getty, control keys (`/ctrlc` `/ctrld` `/ctrlz` `/esc` `/tab` `/enter` …), `/reboot`, `/sysrq` | allowlist **+ armed (TOTP)** |
 | **3b · Fleet** | `/bulk <text>` (type into every online node), `/runmacro <id> [node …]`, `/runbook <id> <node …\|all\|group:NAME>`, `/hub <node> …` | allowlist **+ armed (TOTP)** |
@@ -77,16 +77,35 @@ in [../telegram-bot/README.md](../telegram-bot/README.md).
 
 ### Dual-hub commands
 
-With a [backup hub](dual-hub.md) configured, two more commands surface which hub
-each board is on and let you steer it:
+With a [backup hub](dual-hub.md) configured, more commands surface which hub each
+board is on, pick which hub the bot acts on, and let you steer a board:
 
 - **`/hubs`** (allowlist) — list every board and the hub it's currently connected
   to (its `via <label>`).
+- **`/source [primary|backup]`** (allowlist) — pick which hub the bot **acts on**.
+  With no argument it shows the two hubs and which is active; `/source primary` /
+  `/source backup` switch the bot to that hub. This is the bot's own source/fleet
+  selection — distinct from `/hub <node> …`, which steers an individual board
+  between hubs.
 - **`/hub <node> <switch|prefer|pin|unpin> [target]`** (armed) — steer a board:
   move it now (`switch`), make a hub its home (`prefer`), lock it (`pin`), or
   release a pin (`unpin`). It maps to `POST /api/nodes/{id}/hub`; because it
   redirects control of a board, it is armed / break-glass gated like the shell.
   See [dual-hub.md](dual-hub.md) for the model.
+
+### Dual-hub
+
+The sidecar is dual-hub aware so the phone control plane survives a hub outage.
+Give it a backup hub with **`HUB_BASE_URL_BACKUP`** and every REST call and the
+live event stream prefer the primary, failing over to the backup when the primary
+is unreachable. **`/source`** switches which hub the bot acts on (it still
+auto-fails-over afterward).
+
+Telegram allows only **one active receiver per bot token**, so HA is run the
+**same** bot on both hosts with only **one enabled** (systemctl) and the other a
+hot spare you promote by hand if the first host dies. The live bot already reaches
+both hubs, so a single active bot covers the whole fleet. See
+[dual-hub.md](dual-hub.md#the-telegram-sidecar-in-a-dual-hub-setup) for the setup.
 
 ## Security model
 

@@ -98,6 +98,7 @@ def build_app() -> FastAPI:
             asyncio.create_task(bg.stats_broadcaster(hub)),
             asyncio.create_task(bg.loop_lag_monitor(hub)),
             asyncio.create_task(bg.nightly_backup(hub)),
+            asyncio.create_task(bg.peer_poller(hub)),  # dual-hub peer visibility (no-op without HUB_PEERS)
         ]
         print("hub: swarm TCP on %s:%d, web on %s:%d" % (
             config.PROCESS.tcp_host, config.PROCESS.tcp_port,

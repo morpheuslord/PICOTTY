@@ -330,6 +330,17 @@
     return h("span", { title: "reached this hub via its \"" + label + "\" link (dual-hub failover)", "data-tip-help": "failover",
       style: "flex:none;padding:" + pad + ";font-size:" + fs + ";font-weight:600;letter-spacing:0.02em;background:#3a6ea5;color:#eef4fb" }, "via " + label);
   }
+  // A board that is offline HERE but live on a peer hub (dual-hub). Shows where it
+  // actually is, so it reads as "active on the primary", not just "offline" — and
+  // signals you can still steer it (the directive relays to that peer).
+  function peerBadge(peerHub, opts) {
+    if (peerHub == null || peerHub === "") return null;
+    const big = opts && opts.big;
+    const pad = big ? "2px 8px" : "0 6px";
+    const fs = big ? "11px" : "10px";
+    return h("span", { title: "This board is connected to the peer hub \"" + peerHub + "\" right now. Use the Hub control to pull it here (the directive relays to that hub).", "data-tip-help": "failover",
+      style: "flex:none;padding:" + pad + ";font-size:" + fs + ";font-weight:600;letter-spacing:0.02em;background:#6a5aa5;color:#f0ecfb" }, "on " + peerHub); }
+
   // The label to default the target field to: the opposite of the node's current
   // hub_label, so the common "flip to the other hub" case needs no typing.
   const otherHubLabel = (label) => (label === "primary" ? "backup" : "primary");
@@ -651,6 +662,7 @@
           (on ? promptBadge(n.promptState) : null),
           (on ? netBadge(n) : null),
           hubBadge(n.hubLabel),
+          (on ? null : peerBadge(n.peerHub)),
           h("span", { style: "margin-left:auto;font-size:11px;color:var(--color-neutral-600);flex:none" }, rel(n.lastSeen))),
         h("div", { style: "display:flex;align-items:center;gap:8px;margin-top:4px;padding-left:17px" },
           h("span", { class: "tag tag-neutral", style: "padding:1px 7px" }, n.group || "—"),
@@ -719,7 +731,8 @@
         (online ? targetBadge(s.target, { big: true }) : null),
         (online ? promptBadge(s.promptState, { big: true }) : null),
         (online ? netBadge(s, { big: true }) : null),
-        hubBadge(s.hubLabel, { big: true })),
+        hubBadge(s.hubLabel, { big: true }),
+        (online ? null : peerBadge(s.peerHub, { big: true }))),
       h("div", { style: "display:flex;flex-wrap:wrap;gap:2px var(--space-4);font-size:12px;color:var(--color-neutral-700);font-family:ui-monospace,Menlo,monospace;overflow:hidden" },
         h("span", {}, s.ip || ""),
         h("span", { title: "fw = the running firmware's FW_VERSION from the node's code.py — NOT the OTA bundle name. See the muted “flashed:” line for the last bundle pushed.", "data-tip-help": "ota" }, "fw " + (s.fw || "")),
@@ -1550,17 +1563,23 @@
   function openHubSheet(nodeId) {
     const node = findNode(nodeId) || {};
     const cur = node.hubLabel || null;
-    const dflt = otherHubLabel(cur);
-    const target = h("input", { class: "input", value: dflt, style: "font-family:ui-monospace,Menlo,monospace",
+    const onPeer = node.status !== "online" && node.peerHub;   // live on the other hub
+    const dflt = onPeer ? "" : otherHubLabel(cur);             // no reliable prefill when pulling from a peer
+    const target = h("input", { class: "input", value: dflt, placeholder: onPeer ? "e.g. backup" : "", style: "font-family:ui-monospace,Menlo,monospace",
       title: "Label of the destination hub, as the node knows it (e.g. primary / backup). The node ignores a hub it isn't configured for.", "data-tip-help": "failover" });
     const tval = () => target.value.trim();
     const guardTarget = (fn) => () => { const t = tval(); if (!t) { toast("Failed", "a target hub label is required"); target.focus(); return; } fn(t); };
     const action = (label, desc, btnLabel, onClick, ghost) => h("div", { style: "display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--color-divider)" },
       h("div", { style: "flex:1;min-width:0" }, h("div", { style: "font-size:13px;font-weight:600" }, label), h("div", { style: "font-size:12px;color:var(--color-neutral-700);margin-top:2px" }, desc)),
       h("button", { class: "btn " + (ghost ? "btn-ghost" : "btn-secondary"), style: "flex:none", onClick }, btnLabel));
+    const intro = onPeer
+      ? h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, h("b", {}, nodeId), " is currently connected to the peer hub ",
+          h("b", {}, node.peerHub), ", not this one. Enter the label THIS board uses for the hub you want it on, then Move — the directive relays to ",
+          h("b", {}, node.peerHub), " and the board switches over.")
+      : h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Steer ", h("b", {}, nodeId), " between its configured hubs. It currently reached us via ",
+          h("b", {}, cur || "an unlabelled / single hub"), ". Enter the destination hub's label — the node only honours a hub it is configured for.");
     const body = h("div", { style: "display:flex;flex-direction:column;gap:4px" },
-      h("div", { style: "font-size:12px;color:var(--color-neutral-700)" }, "Steer ", h("b", {}, nodeId), " between its configured hubs. It currently reached us via ",
-        h("b", {}, cur || "an unlabelled / single hub"), ". Enter the destination hub's label — the node only honours a hub it is configured for."),
+      intro,
       h("div", { class: "field", style: "padding:10px 0;border-bottom:1px solid var(--color-divider)" }, h("label", {}, "Target hub label"), target),
       action("Move now", "One-shot switch to the target hub. Preference is unchanged — failover can move it back.", "Move", guardTarget((t) => sendHubDirective(nodeId, "switch", t))),
       action("Set as home hub", "Make the target the node's preferred/home hub AND move now (persisted).", "Set home", guardTarget((t) => sendHubDirective(nodeId, "prefer", t))),
@@ -2476,6 +2495,7 @@
       status: n.status, rttMs: n.rtt_ms, caps: (n.capabilities || []).join(","), lastSeen: n.last_seen || now(), inflight: n.inflight || 0,
       layout: n.layout || "us", promptState: n.prompt_state || null, target: n.target || "unknown", lastOta: n.last_ota || null,
       hubLabel: n.hub_label != null ? n.hub_label : null,
+      peerHub: n.peer_hub != null ? n.peer_hub : null,
       rttAvgMs: n.rtt_avg_ms, jitterMs: n.jitter_ms, lossPct: n.loss_pct, nodeUptimeMs: n.node_uptime_ms, reconnects: n.reconnects || 0 };
   }
   async function loadLive() {

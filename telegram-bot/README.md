@@ -23,7 +23,7 @@ no webhook, no public endpoint. The only firewall change is an egress allow to
 | Tier | Commands | Gate |
 |---|---|---|
 | **1 · Stats** | `/status` `/nodes` `/uptime [node]` `/telemetry [node]` | allowlist |
-| **1b · Read-only** | `/events [n]` (recent audit), `/log <node> [lines]` (recent console), `/search <text>` (search console history), `/ping <node>` (active RTT), `/hubs`, `/macros`, `/runbooks` | allowlist |
+| **1b · Read-only** | `/events [n]` (recent audit), `/log <node> [lines]` (recent console), `/search <text>` (search console history), `/ping <node>` (active RTT), `/hubs`, `/source [primary\|backup]`, `/macros`, `/runbooks` | allowlist |
 | **2 · Alerts** | node offline/online, watchdog recovery, command failed, hub restart; `/mute` `/unmute` | allowlist |
 | **3 · Terminal** | `/shell [node]`, plain text → getty, `/ctrlc` `/ctrld` `/ctrlz` `/esc` `/tab` `/enter` `/up` `/down` `/left` `/right`, `/reboot`, `/sysrq` | allowlist **+ armed (TOTP)** |
 | **3b · Fleet** | `/bulk <text>` (type into every online node), `/runmacro <id> [node …]`, `/runbook <id> <node …\|all\|group:NAME>`, `/hub <node> <switch\|prefer\|pin\|unpin> [target]` | allowlist **+ armed (TOTP)** |
@@ -32,8 +32,9 @@ Tier 3 is built on the hub `send` command and is **gated on the node advertising
 `serial_tx`** — a node whose firmware can't write serial won't open a session. The
 read-only and fleet commands are thin wrappers over existing hub REST; the fleet
 commands touch many boards at once, so they sit behind the same break-glass arming
-as the shell. `/hubs` and `/hub` cover [dual-hub failover](../docs/dual-hub.md) —
-which hub each board is on, and steering a board to the other hub.
+as the shell. `/hubs`, `/source`, and `/hub` cover [dual-hub
+failover](../docs/dual-hub.md) — which hub each board is on, which hub the bot
+acts on, and steering a board to the other hub.
 
 ## Security model
 
@@ -95,6 +96,18 @@ flow) is in **[../docs/telegram.md](../docs/telegram.md)**.
 
 > After a `git pull` that changes hub code, `sudo systemctl restart swarm-hub` so
 > new REST routes take effect (otherwise the install endpoint returns 405).
+
+## Dual-hub
+
+Set **`HUB_BASE_URL_BACKUP`** in `telegram.env` and the bot fails over between
+hubs — every REST call and the live event stream prefer the primary and switch to
+the backup when the primary is down. **`/source [primary|backup]`** picks which
+hub the bot acts on (it still auto-fails-over afterward).
+
+Telegram allows only **one active receiver per bot token**, so for HA run the
+**same** bot on both hosts but keep only **one enabled** (systemctl) — the other
+is a hot spare you promote by hand if the first host dies. Full model and setup:
+**[../docs/dual-hub.md](../docs/dual-hub.md)**.
 
 ## Testing without Telegram
 

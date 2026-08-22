@@ -38,6 +38,10 @@ jobs:
         working-directory: hub
         run: uv run python tests/test_integration.py
 
+      - name: test_failover_relay
+        working-directory: hub
+        run: uv run python tests/test_failover_relay.py
+
   firmware:
     name: firmware — hub-selector unit
     runs-on: ubuntu-latest

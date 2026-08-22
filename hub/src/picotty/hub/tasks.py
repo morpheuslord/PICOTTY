@@ -131,6 +131,43 @@ async def nightly_backup(hub: Hub):
         await asyncio.sleep(86400)
 
 
+async def peer_poller(hub: Hub):
+    """Dual-hub: poll each peer hub's roster so this hub knows which boards are
+    live on the OTHER hub. Rebuilds hub.peer_nodes (node_id -> peer hub_id) so a
+    board on the primary shows as "active on <peer>" here (not just offline), and
+    a steer directive can relay to the peer that holds it. No-op without HUB_PEERS."""
+    peers = config.PROCESS.hub_peers
+    if not peers:
+        return
+    import httpx
+    interval = max(2.0, config.PROCESS.node_ping_interval_ms / 1000)
+    # Cache each peer's human id (from /api/health) so we show a name, not a URL.
+    peer_ids: dict = {}
+    await asyncio.sleep(2)  # let startup settle
+    while True:
+        mapping: dict = {}
+        for peer in peers:
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    if peer not in peer_ids:
+                        try:
+                            h = (await client.get(peer + "/api/health")).json()
+                            peer_ids[peer] = h.get("hub_id") or peer
+                        except Exception:
+                            peer_ids[peer] = peer
+                    data = (await client.get(peer + "/api/nodes",
+                                             params={"status": "online"})).json()
+            except Exception:
+                continue
+            label = peer_ids.get(peer, peer)
+            for n in data.get("nodes", []):
+                nid = n.get("id")
+                if nid:
+                    mapping.setdefault(nid, label)  # first peer that has it wins
+        hub.peer_nodes = mapping
+        await asyncio.sleep(interval)
+
+
 async def loop_lag_monitor(hub: Hub):
     """Cheap event-loop lag estimate: measure oversleep on a fixed tick."""
     tick = 0.5

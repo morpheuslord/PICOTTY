@@ -79,6 +79,17 @@ independent (own DB each) and share only the node token:
    either can authenticate the same board.
 3. On each node's `settings.toml`, point `HUB_IP_BACKUP` at the backup hub. Nodes
    prefer the primary and fail over to the backup when it's unreachable.
+4. On **both** hubs, set **`HUB_PEERS`** to the *other* hub's base URL (e.g.
+   `HUB_PEERS=http://192.168.1.169:8080` on the primary, and the primary's URL on
+   the backup). This enables cross-hub takeover and peer visibility: each hub shows
+   boards held by its peer as "active on `<peer>`", and steering a board a hub
+   doesn't hold relays the directive to the peer that does — so you can pull a
+   board across from either dashboard. Peer calls carry no auth, so this assumes a
+   trusted management VLAN.
+
+The **Telegram sidecar** can run on both hosts too: set `HUB_BASE_URL_BACKUP` so
+the bot fails over between hubs, but keep only **one** unit enabled at a time
+(Telegram allows one active receiver per bot token) — the other is a hot spare.
 
 Full model, runtime steering, and token setup: **[dual-hub.md](dual-hub.md)**.
 

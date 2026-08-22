@@ -76,6 +76,11 @@ class Hub:
         # Per-node lock serializing queue drains: the hello-drain and an
         # enqueue-triggered drain must not both claim the same pending rows.
         self._drain_locks: dict = {}
+        # Dual-hub: nodes currently held by a PEER hub (node_id -> peer hub_id),
+        # refreshed by the peer_poller task. Lets this hub show a board that is
+        # live on the other hub as "active on <peer>" instead of just offline, and
+        # is the reason its steer directive relays there. Empty without HUB_PEERS.
+        self.peer_nodes: dict = {}
 
     def feed_expect(self, node_id: str, text: str) -> None:
         """Hand a fresh output chunk to any running expect job for this node."""
@@ -228,18 +233,58 @@ class Hub:
             await self.db.insert_event("cmd", node_id, audit_detail, now_ms())
         return {"ok": True}
 
-    async def send_hub_directive(self, node_id: str, action: str, target: str = None) -> dict:
+    async def send_hub_directive(self, node_id: str, action: str, target: str = None,
+                                 allow_relay: bool = True) -> dict:
         """Steer a node between its configured hubs (dual-hub failover).
 
         action is switch|prefer|pin|unpin; target is the destination hub's label
         (required for all but unpin). The node validates the target against its own
         configured hubs, so this can only move a board between hubs it already
-        knows — never to an arbitrary address."""
-        frame = {"type": "hub_directive", "action": action}
+        knows — never to an arbitrary address.
+
+        A board holds exactly one hub connection at a time, so only the hub that
+        currently HOLDS the node can push it a frame. When this hub doesn't hold
+        the node, we relay the directive to a peer hub that does — that is how an
+        on-demand takeover works from the backup while the board is on the primary.
+        `allow_relay` is cleared on a relayed call so peers never relay in a loop."""
+        state = self.registry.get(node_id)
+        if state is not None and state.status != "offline":
+            frame = {"type": "hub_directive", "action": action}
+            if target is not None:
+                frame["target"] = target
+            detail = "hub directive: %s%s" % (action, (" -> %s" % target) if target else "")
+            return await self.send_control(node_id, frame, detail)
+        # Not held here — relay to a peer that has it (e.g. the primary).
+        if allow_relay and config.PROCESS.hub_peers:
+            relayed = await self._relay_directive(node_id, action, target)
+            if relayed is not None:
+                return relayed
+        return {"ok": False, "error": "node_offline",
+                "detail": "node %s is not connected to this hub%s" % (
+                    node_id, " or any peer hub" if config.PROCESS.hub_peers else "")}
+
+    async def _relay_directive(self, node_id: str, action: str, target: str = None):
+        """Ask each peer hub to deliver a directive to a node THIS hub doesn't
+        hold. Returns the peer's result dict on the first success, else None."""
+        import httpx
+        body = {"action": action}
         if target is not None:
-            frame["target"] = target
-        detail = "hub directive: %s%s" % (action, (" -> %s" % target) if target else "")
-        return await self.send_control(node_id, frame, detail)
+            body["target"] = target
+        for peer in config.PROCESS.hub_peers:
+            url = peer + "/api/nodes/%s/hub" % node_id
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    # The relay header stops the peer from relaying again (no loop).
+                    r = await client.post(url, json=body, headers={"X-Picotty-Relay": "1"})
+                    data = r.json()
+            except Exception:
+                continue
+            if isinstance(data, dict) and data.get("ok"):
+                await self.audit("cmd", node_id, "hub directive relayed to peer %s: %s%s" % (
+                    peer, action, (" -> %s" % target) if target else ""))
+                data["relayed_via"] = peer
+                return data
+        return None
 
     async def bridge_send(self, node_id: str, payload: bytes) -> bool:
         """Push raw bytes to a node's serial port for the raw serial bridge.
@@ -400,8 +445,28 @@ class Hub:
             "loss_pct": state.loss_pct if online else None,
             "node_uptime_ms": self._node_uptime_now(state) if online else None,
             "reconnects": state.reconnects if state else 0,
+            # Dual-hub: if this board isn't on us but a peer hub holds it, name the
+            # peer so the dashboard shows it as active-elsewhere (and offers to pull
+            # it) rather than just "offline".
+            "peer_hub": (self.peer_nodes.get(node_id) if not online else None),
         }
         return merged
+
+    def merge_peer_only(self, node_id: str) -> dict:
+        """A minimal node record for a board this hub has never seen locally but a
+        PEER hub currently holds. Lets it appear in the roster as active-on-peer
+        (not missing) and be steered — the directive relays to the peer. Same
+        shape as merge_node so the dashboard maps it identically."""
+        return {
+            "id": node_id, "label": "", "group": "", "notes": "",
+            "fw_version": None, "last_ota": None, "first_seen": None, "last_seen": None,
+            "status": "offline", "ip": "", "capabilities": [], "layout": "us",
+            "hub_label": None, "prompt_state": None, "target": "unknown", "host_up": None,
+            "connected_at": None, "rtt_ms": None, "inflight": 0,
+            "rtt_avg_ms": None, "rtt_min_ms": None, "rtt_max_ms": None,
+            "jitter_ms": None, "loss_pct": None, "node_uptime_ms": None, "reconnects": 0,
+            "peer_hub": self.peer_nodes.get(node_id),
+        }
 
     @staticmethod
     def _node_uptime_now(state) -> Optional[int]:

@@ -75,3 +75,75 @@ a:hover { color: var(--color-accent-600); }
   background: #33302b;
   border-color: color-mix(in srgb, #ffffff 22%, transparent);
 }
+
+/* ============================================================================
+   Responsive shell
+   The app shell and its rails are built with inline styles (imported from a
+   fixed-width desktop mockup): a full-height flex column (nav + a 3-column row —
+   node rail | console | activity rail) inside body{overflow:hidden}. On a phone
+   those fixed columns overflowed and were clipped. These rules restructure it
+   without touching the JS: attribute selectors match the exact inline styles of
+   the shell containers, so they must use !important to win over the inline rule.
+   Selectors are intentionally specific (`flex:none;width:NNNpx`) so helper text
+   `max-width` and tiny dot widths are never caught.
+   ========================================================================== */
+
+/* Desktop: make the fixed rails FLUID so the layout adapts to any window
+   aspect ratio (narrow-tall to ultrawide) instead of two hard-coded pixel
+   columns squeezing the console. */
+@media (min-width: 901px) {
+  [style*="flex:none;width:304px"] { width: clamp(232px, 22vw, 340px) !important; }
+  [style*="flex:none;width:324px"] { width: clamp(248px, 24vw, 380px) !important; }
+  [style*="flex:none;width:360px"] { width: clamp(268px, 26vw, 400px) !important; }
+  [style*="flex:none;width:400px"] { width: clamp(288px, 28vw, 440px) !important; }
+}
+
+/* Tablet / phone: stack the columns, let the page scroll, keep the console tall
+   and usable. Below this width three side-by-side columns cannot fit. */
+@media (max-width: 900px) {
+  html, body { height: auto; }
+  body { overflow-y: auto; overflow-x: hidden; }
+
+  /* The shell (app > the single flex-column div) grows with content instead of
+     being pinned to one viewport height. dvh tracks mobile browser chrome. */
+  #app > div { height: auto !important; min-height: 100vh; min-height: 100dvh; }
+
+  /* Nav wraps to as many rows as it needs rather than clipping links/stats. */
+  .nav {
+    flex-wrap: wrap !important; overflow: visible !important; height: auto;
+    gap: var(--space-2) var(--space-3) !important; row-gap: var(--space-2) !important;
+  }
+
+  /* The view host and every view's top row become vertical stacks. */
+  #view { flex-direction: column !important; min-height: 0; }
+  #view > * { flex-direction: column !important; min-width: 0; }
+
+  /* Every fixed-width side panel/rail spans the full width when stacked. */
+  [style*="flex:none;width:304px"],
+  [style*="flex:none;width:324px"],
+  [style*="flex:none;width:360px"],
+  [style*="flex:none;width:400px"] {
+    width: 100% !important; flex: none !important;
+    max-width: 100% !important;
+  }
+
+  /* Inner scroll lists (node list, activity rail) would collapse to 0 height in
+     a page-scroll layout — let them grow to content and scroll the page. */
+  #view [style*="flex:1;overflow-y:auto;min-height:0"] {
+    flex: none !important; overflow: visible !important;
+  }
+
+  /* The serial console is the point of the page — give it a solid, fixed height
+     (it keeps its own scroll) so it never collapses in the stack. */
+  .sc-term {
+    height: 60vh !important; min-height: 300px;
+    flex: none !important; overflow-y: auto !important;
+  }
+}
+
+/* Small phones: tighten chrome so more of the console shows. */
+@media (max-width: 520px) {
+  body { font-size: 14px; }
+  .nav { padding: var(--space-2) var(--space-3); }
+  .sc-term { height: 56vh !important; }
+}

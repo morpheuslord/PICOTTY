@@ -117,6 +117,38 @@ Drive it three ways:
 - **Telegram:** `/hubs` shows which hub each board is on; `/hub <node>
   <switch|prefer|pin|unpin> [target]` steers it (armed / break-glass gated).
 
+## Driving a board from *either* hub (peer relay)
+
+A board holds exactly one hub connection at a time, so only the hub that
+currently **holds** the board can push it a frame. That means a plain single hub
+can't steer — or even see — a board that's connected to the *other* hub: to the
+backup, a board living on the primary just looks offline.
+
+Point each hub at the other with **`HUB_PEERS`** (a comma-separated list of the
+other hubs' base URLs) and both gaps close:
+
+```bash
+HUB_ID=hub-main    HUB_PEERS=http://192.168.1.169:8080  picotty-hub   # primary knows the backup
+HUB_ID=hub-backup  HUB_PEERS=http://192.168.1.174:8080  picotty-hub   # backup knows the primary
+```
+
+With peers configured:
+
+- **Peer visibility.** Each hub polls its peers' rosters, so a board live on the
+  other hub shows in the list as **"active on `<peer>`"** (a purple badge) instead
+  of missing/offline — even for a board this hub has never seen. You know it's up
+  and where.
+- **On-demand takeover from either hub.** When you steer a board the hub doesn't
+  hold, the directive is **relayed** to the peer that does hold it, which delivers
+  it — the board then switches over to you. So you can stand at the **backup's**
+  dashboard, hit **Move / Set-as-home** on a board that's on the primary, and pull
+  it across. (A relayed call is never relayed again, so peers can't loop.)
+
+`HUB_PEERS` assumes a **trusted management VLAN** — peer calls carry no auth,
+matching the node-token posture. Leave it unset for a standalone hub; failover
+and holding-hub steering still work, you just can't steer/see a board from the
+hub that isn't holding it.
+
 ## Sharing the node token
 
 The board authenticates with the same `NODE_TOKEN` on every hub, so both hubs
@@ -148,6 +180,59 @@ defaults to the host's name.
 3. You decide the backup should be home: from the backup's dashboard (or `/hub A2
    prefer backup`) you promote it. The board persists the preference; future
    failovers now prefer `hub-backup`.
+
+## The Telegram sidecar in a dual-hub setup
+
+The phone control plane should survive a hub outage too, so the sidecar is
+dual-hub aware.
+
+### The bot fails over between hubs
+
+Give the sidecar a backup hub and it prefers the primary, failing over to the
+backup if the primary is unreachable — every REST call and the live event stream
+follow whichever hub is up:
+
+```ini
+# in ~/.config/picotty/telegram.env
+HUB_BASE_URL=http://192.168.1.174:8080          # primary
+HUB_BASE_URL_BACKUP=http://192.168.1.169:8080   # backup
+```
+
+Pick which hub the bot **acts on** from chat:
+
+- **`/source`** — show the two hubs and which one is active.
+- **`/source primary`** / **`/source backup`** — switch the bot to that hub. (It
+  still auto-fails-over if that hub later goes down.)
+
+So `/source` chooses your **source/fleet**, while `/hub <node> …` (armed) steers
+an individual **board** between hubs.
+
+### Running a sidecar on both hosts (one active)
+
+Telegram allows only **one active receiver per bot token** — two processes polling
+the same token conflict and drop messages. So run the **same** bot on both hosts
+but keep only **one enabled** at a time; the other is a hot spare:
+
+```bash
+# on BOTH hosts: install with the SAME telegram.env (token, allowlist, both hubs)
+bash telegram-bot/scripts/install.sh
+
+# host A (the one you run day to day): make it the live bot
+bash telegram-bot/scripts/install-service.sh    # enables + starts swarm-telegram
+
+# host B (the spare): install the unit but leave it OFF
+sudo systemctl disable --now swarm-telegram
+```
+
+If host A dies, promote the spare with one command on host B:
+
+```bash
+sudo systemctl enable --now swarm-telegram
+```
+
+The live bot already reaches **both** hubs (via `HUB_BASE_URL_BACKUP`) and you pick
+the source with `/source`, so a single active bot covers the whole fleet — the
+second host is purely for surviving the loss of the first host.
 
 ## See also
 
