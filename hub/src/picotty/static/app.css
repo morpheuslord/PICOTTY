@@ -92,10 +92,10 @@ a:hover { color: var(--color-accent-600); }
    aspect ratio (narrow-tall to ultrawide) instead of two hard-coded pixel
    columns squeezing the console. */
 @media (min-width: 901px) {
-  [style*="flex:none;width:304px"] { width: clamp(232px, 22vw, 340px) !important; }
-  [style*="flex:none;width:324px"] { width: clamp(248px, 24vw, 380px) !important; }
-  [style*="flex:none;width:360px"] { width: clamp(268px, 26vw, 400px) !important; }
-  [style*="flex:none;width:400px"] { width: clamp(288px, 28vw, 440px) !important; }
+  [style*="flex:none;width:304px"] { width: clamp(228px, 20vw, 304px) !important; }
+  [style*="flex:none;width:324px"] { width: clamp(240px, 21vw, 324px) !important; }
+  [style*="flex:none;width:360px"] { width: clamp(264px, 23vw, 360px) !important; }
+  [style*="flex:none;width:400px"] { width: clamp(288px, 25vw, 400px) !important; }
 }
 
 /* Tablet / phone: stack the columns, let the page scroll, keep the console tall

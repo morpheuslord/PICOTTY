@@ -676,7 +676,7 @@
   function buildCenter() {
     const s = sel() || {};
     const disabled = s.status !== "online";
-    ui.header = h("div", { style: "flex:none;display:flex;align-items:stretch;border-bottom:2px solid var(--color-divider)" });
+    ui.header = h("div", { style: "flex:none;display:flex;flex-direction:column;border-bottom:2px solid var(--color-divider)" });
     renderHeaderInto(ui.header);
 
     ui.lineCount = h("span", { style: "font-size:11px;color:var(--color-neutral-600)" }, "0 lines buffered");
@@ -723,7 +723,7 @@
     const s = sel() || {};
     const online = s.status === "online";
     const disabled = !online;
-    host.appendChild(h("div", { style: "flex:1 1 auto;min-width:0;overflow:hidden;padding:var(--space-3) var(--space-4);display:flex;flex-direction:column;justify-content:center;gap:2px;border-right:1px solid var(--color-divider)" },
+    host.appendChild(h("div", { style: "overflow:hidden;padding:var(--space-3) var(--space-4);display:flex;flex-direction:column;gap:3px" },
       h("div", { style: "display:flex;align-items:baseline;gap:10px;min-width:0" },
         h("h3", { style: "margin:0;font-family:ui-monospace,Menlo,monospace" }, s.id || "—"),
         h("span", { style: "font-size:14px;color:var(--color-neutral-700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" }, s.label || ""),
@@ -760,7 +760,7 @@
           ? h("span", { style: "color:var(--color-neutral-600)", title: "Last firmware bundle flashed to this node via OTA (provenance). Distinct from fw/FW_VERSION.", "data-tip-help": "ota" }, "flashed: " + String(s.lastOta).replace(/\s*@.*$/, ""))
           : null))));
     const hasNode = !!s.id;
-    host.appendChild(h("div", { style: "flex:none;margin-left:auto;display:flex;align-items:center;gap:var(--space-2);padding:6px var(--space-4);flex-wrap:wrap;justify-content:flex-end" },
+    host.appendChild(h("div", { style: "display:flex;align-items:center;gap:var(--space-2);padding:6px var(--space-4) var(--space-2);flex-wrap:wrap;justify-content:flex-start;border-top:1px solid var(--color-divider)" },
       h("button", { class: "btn btn-secondary", title: "Round-trip the node and refresh its RTT", onClick: doPing }, "Ping"),
       h("button", { class: "btn btn-secondary", title: "Ask the node to flush its serial receive buffer to the hub", onClick: doRead }, "Read serial"),
       helpLink("ping-read-reboot", "Ping · Read · Reboot"),
