@@ -66,6 +66,22 @@ steer it. New **`HUB_PEERS`** (comma-separated peer hub URLs) closes the gap:
   the primary. Relayed calls are never relayed again (loop-safe). Peer calls
   assume a trusted management VLAN (no auth), matching the node-token posture.
 
+### Added — Telegram button UI
+
+The bot is now **tap-driven**, not type-driven. **`/menu`** (and `/start`) opens an
+inline-keyboard home screen — Status, Nodes, Telemetry, Events, Fleet, Alerts,
+Source hub, Arm — and everything drills down by tapping:
+
+- **Nodes → node detail** with action buttons: Ping, Read, Telemetry, Log, Mute,
+  and (when armed) Shell, Reboot (confirm step), SysRq (key picker), Move hub.
+- **Fleet** → Macros / Runbooks as buttons, then a "run on ALL online / this node"
+  target picker.
+- **Source hub** switch and per-node hub steering are button flows too.
+- **Arm** by tapping 🔒 then sending your TOTP code (no `/arm` needed).
+- **Context memory**: the bot remembers your selected node and the pending prompt,
+  so buttons act without re-typing ids; the home screen shows live hub/online/armed
+  status. Every typed command still works.
+
 ### Added — Telegram sidecar dual-hub
 
 - **The bot fails over between hubs.** Set `HUB_BASE_URL_BACKUP` and the sidecar

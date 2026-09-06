@@ -115,6 +115,43 @@ def test_failover_hub_advances_on_conn_error():
     asyncio.run(run())
 
 
+def test_menus_callback_scheme():
+    from app import menus
+    from telegram import InlineKeyboardMarkup
+
+    def datas(kb):
+        return [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
+
+    m = menus.main_menu(armed=False, multi_hub=True)
+    assert isinstance(m, InlineKeyboardMarkup)
+    assert {"m:nodes", "m:status", "m:hubs", "m:arm"} <= set(datas(m))
+
+    nm = menus.nodes_menu([{"id": "Node-A", "status": "online"},
+                           {"id": "Node-B", "status": "offline", "peer_hub": "hub-x"}])
+    assert "n:Node-A" in datas(nm) and "n:Node-B" in datas(nm) and "m:main" in datas(nm)
+
+    node = {"id": "Node-A", "status": "online", "capabilities": ["hid", "cdc", "serial_tx"]}
+    kb = menus.node_menu(node, armed=True, muted=False, multi_hub=True)
+    assert {"a:shell:Node-A", "a:reboot:Node-A", "a:sysrqm:Node-A", "a:hubm:Node-A", "a:ping:Node-A"} <= set(datas(kb))
+    # disarmed hides shell/reboot, shows the arm prompt
+    kb2 = menus.node_menu(node, armed=False, muted=True, multi_hub=False)
+    assert "a:shell:Node-A" not in datas(kb2) and "m:arm" in datas(kb2) and "a:unmute:Node-A" in datas(kb2)
+
+    sk = menus.sysrq_menu("Node-A")
+    assert "a:sysrq:Node-A:b" in datas(sk) and "a:sysrq:Node-A:o" in datas(sk)
+    cm = menus.confirm_menu("a:reboot!:Node-A", "n:Node-A", "Reboot")
+    assert "a:reboot!:Node-A" in datas(cm) and "n:Node-A" in datas(cm)
+    hm = menus.node_hub_menu("Node-A", "backup")
+    assert {"hub:Node-A:switch:backup", "hub:Node-A:prefer:backup", "hub:Node-A:unpin:-"} <= set(datas(hm))
+    rt = menus.run_targets_menu("mac", 3, ["Node-A", "Node-B"])
+    assert "macrun:3:*" in datas(rt) and "macrun:3:Node-A" in datas(rt)
+
+    # Telegram caps callback_data at 64 bytes — never exceed it.
+    for kbx in (m, nm, kb, kb2, sk, cm, hm, rt, menus.fleet_menu(), menus.hubs_menu([{"label": "primary", "base": "http://x", "active": True}])):
+        for d in datas(kbx):
+            assert len(d.encode("utf-8")) <= 64, d
+
+
 def test_failover_hub_select_source():
     from app.hubfailover import FailoverHub
     fh = FailoverHub([("http://main:8080", "ws://main:8080/ws"),

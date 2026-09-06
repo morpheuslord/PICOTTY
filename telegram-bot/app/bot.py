@@ -21,7 +21,7 @@ from telegram.ext import (AIORateLimiter, ApplicationBuilder,
                           CommandHandler, ContextTypes, MessageHandler,
                           TypeHandler, filters)
 
-from . import formatting
+from . import formatting, menus
 from .alertengine import AlertEngine
 from .audit import AuditLog
 from .config import Config
@@ -32,6 +32,8 @@ from .security import Security
 from .sessions import CONTROL_KEYS, SessionManager
 
 HELP = """<b>PICOTTY hub bot</b>
+
+<b>👉 /menu — buttons for everything (no typing needed)</b>
 
 <b>Stats</b>
 /status — hub + node roster
@@ -80,6 +82,10 @@ def build_application(cfg: Config):
     hub = FailoverHub(cfg.hub_endpoints, timeout=cfg.hub_timeout_s)
     security = Security(cfg.allowed_chat_ids, cfg.shell_totp_secret, cfg.shell_arm_window_s)
     audit = AuditLog(cfg.audit_log_path)
+    # Per-chat context memory for the button UI: remembers the last-selected node
+    # and any pending prompt (e.g. awaiting a TOTP code), so buttons act without
+    # retyping. In-memory (per process); cheap and reset on restart.
+    ctx: dict = {}
 
     app = (
         ApplicationBuilder()
@@ -156,7 +162,14 @@ def build_application(cfg: Config):
 
     # ---- tier 1: stats ------------------------------------------------------
 
-    async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        # The button home screen — everything is reachable by tapping from here.
+        cid = update.effective_chat.id
+        text, kb = await _main_menu(cid)
+        await update.effective_message.reply_text(
+            text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=kb)
+
+    async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply(update, HELP)
 
     async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -276,6 +289,23 @@ def build_application(cfg: Config):
 
     async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cid = update.effective_chat.id
+        text = update.effective_message.text or ""
+        # Button-flow "Arm": after tapping 🔒 Arm we await a TOTP code as plain text.
+        if _cx(cid).get("await") == "arm":
+            _cx(cid).pop("await", None)
+            code = text.strip()
+            if code.isdigit() and len(code) in (6, 7, 8):
+                if not cfg.shell_enabled:
+                    await reply(update, "🚫 Shell tier is disabled on this sidecar.")
+                    return
+                ok, msg = security.arm(cid, code)
+                await audit.record("arm", chat_id=cid, ok=ok)
+                mt, mkb = await _main_menu(cid)
+                await update.effective_message.reply_text(
+                    ("✅ " if ok else "❌ ") + formatting.esc(msg) + "\n\n" + mt,
+                    parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=mkb)
+                return
+            # not a code -> fall through (maybe they typed something else)
         session = sessions.session_for_chat(cid)
         if not session:
             return   # not in a session; ignore chatter
@@ -569,8 +599,52 @@ def build_application(cfg: Config):
         else:
             await reply(update, "❌ %s" % formatting.esc(str(res.get("detail") or res.get("error") or "failed")))
 
-    # ---- node picker (inline keyboard) --------------------------------------
+    # ---- button UI: menus, node detail, and the callback router -------------
 
+    def _cx(cid):
+        return ctx.setdefault(cid, {})
+
+    def _armed(cid):
+        return cfg.shell_enabled and security.is_armed()
+
+    _multi = getattr(hub, "multi", False)
+
+    async def _show(query, text, kb=None):
+        """Edit the message in place; fall back to a fresh message if we can't."""
+        try:
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML,
+                                          disable_web_page_preview=True, reply_markup=kb)
+        except Exception:
+            try:
+                await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                               disable_web_page_preview=True, reply_markup=kb)
+            except Exception:
+                pass
+
+    async def _main_menu(cid):
+        line = "<b>PICOTTY</b>"
+        try:
+            hl = await hub.health()
+            line = "<b>PICOTTY</b> · %s · %s/%s online%s" % (
+                formatting.esc(str(hl.get("hub_id") or "hub")),
+                hl.get("nodes_online", 0), hl.get("nodes_total", 0),
+                " · 🔓 armed" if _armed(cid) else "")
+        except Exception:
+            line += " · ⚠️ hub unreachable"
+        return line + "\nPick an action:", menus.main_menu(_armed(cid), _multi)
+
+    async def _node_detail(cid, node_id):
+        node = await hub.node(node_id)
+        if node is None:
+            return "No such node: <b>%s</b>" % formatting.esc(node_id), menus.back_only()
+        _cx(cid)["node"] = node_id
+        muted = alerts.is_muted(node_id) if hasattr(alerts, "is_muted") else False
+        text = formatting.render_uptime(node)
+        if node.get("status") == "online":
+            text += "\n\n" + formatting.render_telemetry_node(node)
+        return text, menus.node_menu(node, _armed(cid), muted, _multi)
+
+    # Typed /uptime, /shell with no arg land here -> a tappable node list.
     async def _node_picker(update: Update, action: str, prompt: str) -> None:
         try:
             nodes = await hub.nodes()
@@ -580,31 +654,184 @@ def build_application(cfg: Config):
         if not nodes:
             await reply(update, "No nodes registered.")
             return
-        rows, row = [], []
-        for n in sorted(nodes, key=lambda x: x.get("id", "")):
-            nid = n.get("id", "")
-            row.append(InlineKeyboardButton(nid, callback_data="%s:%s" % (action, nid)))
-            if len(row) == 2:
-                rows.append(row); row = []
-        if row:
-            rows.append(row)
-        await update.effective_message.reply_text(
-            prompt, reply_markup=InlineKeyboardMarkup(rows))
+        await update.effective_message.reply_text(prompt, reply_markup=menus.nodes_menu(nodes))
+
+    async def _open_shell_cb(query, cid, node_id):
+        node = await hub.node(node_id)
+        if node is None or node.get("status") != "online":
+            await query.answer("node is offline", show_alert=True)
+            return
+        if not formatting.has_cap(node, "serial_tx"):
+            await query.answer("firmware has no serial_tx", show_alert=True)
+            return
+        ok, msg = await sessions.open(cid, node_id, make_send(cid))
+        await audit.record("shell_open", chat_id=cid, node=node_id, ok=ok)
+        await query.answer(msg[:180])
+        await _show(query, ("💻 " if ok else "❌ ") + formatting.esc(msg) +
+                    ("\n\nType to send lines to <b>%s</b>; /end to close." % formatting.esc(node_id) if ok else ""),
+                    menus.back_only(node_id))
+
+    async def _node_action(query, cid, act, nid, extra):
+        # ---- non-destructive (allowlist) ----
+        if act == "ping":
+            res = await hub.ping(nid)
+            await query.answer(("🏓 %sms" % res.get("rtt_ms")) if res.get("ok") else "no pong",
+                               show_alert=not res.get("ok"))
+            t, kb = await _node_detail(cid, nid); await _show(query, t, kb); return
+        if act == "read":
+            await hub.cmd(nid, {"type": "read"}); await query.answer("read requested"); return
+        if act == "tel":
+            node = await hub.node(nid); await query.answer()
+            await _show(query, formatting.render_telemetry_node(node or {}), menus.back_only(nid)); return
+        if act == "log":
+            chunks = await hub.node_output(nid, limit=120); await query.answer()
+            await _show(query, formatting.render_output_log(nid, chunks), menus.back_only(nid)); return
+        if act in ("mute", "unmute"):
+            (alerts.mute if act == "mute" else alerts.unmute)(nid)
+            await query.answer(act + "d")
+            t, kb = await _node_detail(cid, nid); await _show(query, t, kb); return
+        if act == "hubm":
+            node = await hub.node(nid) or {}
+            cur = node.get("hub_label")
+            target = "backup" if cur == "primary" else "primary"
+            await query.answer()
+            await _show(query, "🛰 Move <b>%s</b> (on %s) — choose:" % (
+                formatting.esc(nid), formatting.esc(str(cur or "?"))), menus.node_hub_menu(nid, target)); return
+        # ---- destructive: require armed ----
+        if not _armed(cid):
+            await query.answer("Arm the shell first (🔒 Arm)", show_alert=True); return
+        if act == "shell":
+            await _open_shell_cb(query, cid, nid); return
+        if act == "reboot":
+            await query.answer()
+            await _show(query, "🔁 Reboot the MACHINE on <b>%s</b>?" % formatting.esc(nid),
+                        menus.confirm_menu("a:reboot!:%s" % nid, "n:" + nid, "Reboot")); return
+        if act == "reboot!":
+            res = await hub.reboot(nid)
+            await audit.record("reboot", chat_id=cid, node=nid, ok=bool(res.get("ok", True)))
+            await query.answer("reboot sent" if res.get("ok", True) else "failed",
+                               show_alert=not res.get("ok", True))
+            t, kb = await _node_detail(cid, nid); await _show(query, t, kb); return
+        if act == "sysrqm":
+            await query.answer()
+            await _show(query, "⚡ Magic SysRq on <b>%s</b> — pick a key:" % formatting.esc(nid),
+                        menus.sysrq_menu(nid)); return
+        if act == "sysrq":
+            key = (extra[0] if extra else "b")[:1]
+            res = await hub.sysrq(nid, key)
+            await audit.record("sysrq", chat_id=cid, node=nid, detail=key, ok=bool(res.get("ok", True)))
+            await query.answer(("SysRq %s sent" % key) if res.get("ok", True) else "failed",
+                               show_alert=not res.get("ok", True))
+            t, kb = await _node_detail(cid, nid); await _show(query, t, kb); return
+        await query.answer()
 
     async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
-        await query.answer()
-        data = query.data or ""
-        action, _, node_id = data.partition(":")
-        if action == "uptime":
-            node = await _fetch_node(update, node_id)
-            if node is not None:
-                await send(query.message.chat_id, formatting.render_uptime(node))
-        elif action == "shell":
-            if not cfg.shell_enabled or not security.is_armed():
-                await send(query.message.chat_id, "🔒 Shell is disarmed. /arm &lt;code&gt; first.")
+        cid = query.message.chat_id if query.message else update.effective_chat.id
+        data = query.data or "x"
+        parts = data.split(":")
+        head = parts[0]
+        try:
+            if head == "x":
+                await query.answer(); return
+            if head == "m":
+                view = parts[1] if len(parts) > 1 else "main"
+                await query.answer()
+                if view == "main":
+                    t, kb = await _main_menu(cid); await _show(query, t, kb)
+                elif view == "nodes":
+                    nodes = await hub.nodes()
+                    await _show(query, "🖥 <b>Nodes</b> — tap one (🟢 online · 🟣 on peer · ⚪ offline):",
+                                menus.nodes_menu(nodes))
+                elif view == "status":
+                    await _show(query, formatting.render_status(await hub.health(), await hub.stats(), await hub.nodes()),
+                                menus.back_only())
+                elif view == "tel":
+                    await _show(query, formatting.render_telemetry(await hub.nodes()), menus.back_only())
+                elif view == "events":
+                    await _show(query, formatting.render_events(await hub.events(limit=15)), menus.back_only())
+                elif view == "fleet":
+                    await _show(query, "🧰 <b>Fleet</b> — run across nodes:", menus.fleet_menu())
+                elif view == "macros":
+                    macs = await hub.macros()
+                    await _show(query, formatting.render_macros(macs), menus.macros_menu(macs))
+                elif view == "runbooks":
+                    rbs = await hub.runbooks()
+                    await _show(query, formatting.render_runbooks(rbs), menus.runbooks_menu(rbs))
+                elif view == "hubs":
+                    eps = hub.endpoints_status() if _multi else []
+                    await _show(query, "🛰 <b>Source hub</b> — the hub this bot acts on:", menus.hubs_menu(eps))
+                elif view == "alerts":
+                    await _show(query, "🔔 Alerts are <b>%s</b>." % ("on" if cfg.alerts_enabled else "off"),
+                                menus.alerts_menu(cfg.alerts_enabled))
+                elif view == "arm":
+                    if _armed(cid):
+                        await _show(query, "🔓 Shell armed — %d min left." % (security.armed_remaining_s() // 60 + 1),
+                                    InlineKeyboardMarkup([[InlineKeyboardButton("🔒 Disarm", callback_data="disarm")], menus.home_row()]))
+                    else:
+                        _cx(cid)["await"] = "arm"
+                        await _show(query, "🔐 Send your <b>6-digit TOTP code</b> now to arm the shell (or /arm &lt;code&gt;).",
+                                    menus.back_only())
+                elif view == "bulkhelp":
+                    await _show(query, "📢 Type <code>/bulk &lt;line&gt;</code> to send a line to every online node (armed).",
+                                menus.back_only())
                 return
-            await _open_shell(update, node_id)
+            if head == "n":
+                await query.answer()
+                t, kb = await _node_detail(cid, parts[1]); await _show(query, t, kb); return
+            if head == "a":
+                await _node_action(query, cid, parts[1], parts[2], parts[3:]); return
+            if head == "hub":
+                nid, action = parts[1], parts[2]
+                target = parts[3] if len(parts) > 3 and parts[3] != "-" else None
+                if not _armed(cid):
+                    await query.answer("Arm first (🔒 Arm)", show_alert=True); return
+                res = await hub.hub_directive(nid, action, target)
+                await audit.record("hub_directive", chat_id=cid, node=nid,
+                                   detail="%s %s" % (action, target or ""), ok=bool(res.get("ok", True)))
+                await query.answer(("%s → %s" % (action, target)) if target else action)
+                t, kb = await _node_detail(cid, nid); await _show(query, t, kb); return
+            if head == "src":
+                base = hub.select(parts[1]) if hasattr(hub, "select") else None
+                await query.answer(("now on %s" % parts[1]) if base else "unknown hub")
+                eps = hub.endpoints_status() if _multi else []
+                await _show(query, "🛰 Source hub set to <b>%s</b>." % formatting.esc(parts[1]), menus.hubs_menu(eps)); return
+            if head == "disarm":
+                security.disarm(); await audit.record("disarm", chat_id=cid, ok=True)
+                await query.answer("disarmed")
+                t, kb = await _main_menu(cid); await _show(query, t, kb); return
+            if head in ("mac", "rb"):
+                nodes = await hub.nodes()
+                online = [n["id"] for n in nodes if n.get("status") == "online"]
+                await query.answer()
+                await _show(query, "▶ Run %s <b>%s</b> on:" % ("macro" if head == "mac" else "runbook",
+                            formatting.esc(parts[1])), menus.run_targets_menu(head, parts[1], online)); return
+            if head in ("macrun", "rbrun"):
+                item, tgt = parts[1], parts[2]
+                if not _armed(cid):
+                    await query.answer("Arm first (🔒 Arm)", show_alert=True); return
+                nodes = await hub.nodes()
+                online = [n["id"] for n in nodes if n.get("status") == "online"]
+                targets = online if tgt == "*" else [tgt]
+                if head == "macrun":
+                    res = await hub.run_macro(item, targets)
+                    await audit.record("runmacro", chat_id=cid, detail=str(item), ok=bool(res.get("ok", True)))
+                    await query.answer("macro sent")
+                    await _show(query, formatting.render_dispatch("Macro %s on %d node(s)" % (item, len(targets)),
+                                res.get("dispatched", [])), menus.back_only())
+                else:
+                    res = await hub.run_runbook(item, node_ids=targets)
+                    await audit.record("runbook", chat_id=cid, detail=str(item), ok=bool(res.get("ok", True)))
+                    await query.answer("runbook started")
+                    await _show(query, "▶️ Runbook <b>%s</b> started on %d node(s)." % (
+                        formatting.esc(str(item)), len(res.get("nodes", targets))), menus.back_only())
+                return
+            await query.answer()
+        except Exception as e:
+            try:
+                await query.answer("⚠️ %s" % str(e)[:180], show_alert=True)
+            except Exception:
+                pass
 
     async def _fetch_node(update: Update, node_id: str):
         try:
@@ -620,7 +847,8 @@ def build_application(cfg: Config):
 
     app.add_handler(TypeHandler(Update, gate), group=-1)
 
-    app.add_handler(CommandHandler(["start", "help"], cmd_start))
+    app.add_handler(CommandHandler(["start", "menu"], cmd_menu))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("nodes", cmd_nodes))
     app.add_handler(CommandHandler("uptime", cmd_uptime))

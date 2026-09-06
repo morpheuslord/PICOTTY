@@ -40,6 +40,9 @@ class AlertEngine:
     def unmute(self, node_id: str) -> None:
         self._muted.discard(node_id)
 
+    def is_muted(self, node_id: str) -> bool:
+        return node_id in self._muted
+
     async def _emit(self, kind: str, node, title: str, detail: str = "") -> None:
         if not self._enabled:
             return

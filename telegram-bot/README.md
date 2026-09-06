@@ -90,7 +90,13 @@ bash telegram-bot/scripts/run.sh              # foreground (dev)
 bash telegram-bot/scripts/install-service.sh  # systemd unit (starts on boot)
 ```
 
-Then in Telegram: `/status`, `/nodes`, `/uptime`, `/telemetry`, and — after `/arm <code>` —
+Then in Telegram, send **`/menu`** for the button UI — Status, Nodes (→ per-node
+Ping/Read/Telemetry/Log/Mute and, once armed, Shell/Reboot/SysRq/Move-hub), Fleet
+(Macros/Runbooks), Source hub, and Arm — all by tapping, no typing. Tap **🔒 Arm**
+then send your TOTP code to unlock the shell tier. The typed commands below all
+still work.
+
+Or type directly: `/status`, `/nodes`, `/uptime`, `/telemetry`, and — after `/arm <code>` —
 `/shell <node>`. The full walkthrough (with the security model and the credential
 flow) is in **[../docs/telegram.md](../docs/telegram.md)**.
 
