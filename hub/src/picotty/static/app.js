@@ -1357,7 +1357,11 @@
 
     let body;
     if (kind === "key") { body = { chord: [KEY_ALIASES[text] || text.toUpperCase()] }; return dispatchKeys(node.id, body.chord, text); }
-    if (kind === "chord") { const chord = text.split("+").map((p) => p.trim().toUpperCase()); return dispatchKeys(node.id, chord, text); }
+    if (kind === "chord") {
+      const chord = text.split("+").map((p) => p.trim().toUpperCase());
+      if (chordIsSysrq(chord)) return dispatchSysrq(node.id, sysrqKeyFromChord(chord), text);
+      return dispatchKeys(node.id, chord, text);
+    }
     // text
     const payload = { type: "type", text: state.sendNewline ? text + "\n" : text, char_delay_ms: state.charDelay || 0 };
     try {
@@ -1371,6 +1375,25 @@
       const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/keys", { chord });
       if (r.ok) addHistory(r.cmd_id, nodeId, label, "sent");
       else toast("Failed", nodeId + " · " + (r.error || "error"));
+    } catch (e) { toast("Failed", nodeId + " · network error"); }
+  }
+
+  // Magic SysRq (Alt+SysRq+<key>) is NOT a plain HID chord: SysRq is the
+  // PrintScreen key and must be HELD while the command key is tapped. Sending it
+  // through /keys fails on the node with "unknown keycode: 'SYSRQ'", so any chord
+  // naming SysRq is routed to the dedicated /sysrq command, which does the timing.
+  const _SYSRQ_NAMES = ["SYSRQ", "SYS_RQ", "PRTSC", "PRINTSCREEN", "PRINT_SCREEN"];
+  const _CHORD_MODS = ["ALT", "CTRL", "CONTROL", "SHIFT", "GUI", "WIN", "META"];
+  const chordIsSysrq = (chord) => chord.some((k) => _SYSRQ_NAMES.includes(k));
+  function sysrqKeyFromChord(chord) {
+    const cmd = chord.filter((k) => !_SYSRQ_NAMES.includes(k) && !_CHORD_MODS.includes(k)).pop();
+    return (cmd || "b").toLowerCase().slice(0, 1);   // /sysrq takes a single key
+  }
+  async function dispatchSysrq(nodeId, key, label) {
+    try {
+      const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/sysrq", { key });
+      if (r.ok) addHistory(r.cmd_id, nodeId, label, "sent");
+      else { pushLine(nodeId, "err", "sysrq failed: " + (r.detail || r.error)); toast("Failed", nodeId + " · " + (r.error || "error")); }
     } catch (e) { toast("Failed", nodeId + " · network error"); }
   }
 
@@ -1606,6 +1629,8 @@
     const go = () => {
       pushLine(node.id, "in", label + " (" + joined + ")");
       if (state.demo) { pushLine(node.id, "out", "[" + joined + "] injected via HID"); return; }
+      const up = (chord || []).map((k) => String(k).toUpperCase());
+      if (chordIsSysrq(up)) return dispatchSysrq(node.id, sysrqKeyFromChord(up), label);
       dispatchKeys(node.id, chord, label);
     };
     if (needsConfirm(joined)) return confirmDialog("Send " + label + "?", "This chord (" + joined + ") can reset or interrupt the target machine on " + node.id + ". Send it?", "Send", go);

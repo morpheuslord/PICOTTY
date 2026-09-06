@@ -81,7 +81,18 @@ steer it. New **`HUB_PEERS`** (comma-separated peer hub URLs) closes the gap:
 The dashboard (a fixed-width desktop layout) now adapts to phones, tablets, and
 any window aspect ratio: the side rails are fluid on desktop and the three columns
 stack with the console kept usably tall on narrow screens, with the page scrolling
-instead of clipping. CSS-only; no behavior change.
+instead of clipping. The node header is a vertical stack (info above a wrapping
+action toolbar) so the info no longer collapses under the buttons.
+
+### Fixed — Magic SysRq chord
+
+The **Alt+SysRq+B** quick-chord (and any custom chord naming SysRq) was sent as a
+plain HID chord, which failed on the node with `unknown keycode: 'SYSRQ'` (SysRq is
+the PrintScreen key, and it must be held while the command key is tapped). Such
+chords now route to the dedicated `/sysrq` command, which does the correct timing.
+Also fixed `HubClient.sysrq()` sending the key under the wrong field (`command`
+instead of `key`), so a Telegram `/sysrq <node> <key>` no longer silently defaulted
+to `b` (reboot).
 
 ### Verified
 

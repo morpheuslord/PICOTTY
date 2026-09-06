@@ -166,7 +166,9 @@ class HubClient:
         return await self.post("/nodes/%s/reboot" % node_id)
 
     async def sysrq(self, node_id: str, command: str) -> dict:
-        return await self.post("/nodes/%s/sysrq" % node_id, {"command": command})
+        # The REST endpoint reads `key` (a single SysRq command char); sending
+        # `command` was silently ignored, so every sysrq defaulted to 'b' (reboot).
+        return await self.post("/nodes/%s/sysrq" % node_id, {"key": command})
 
     # -- live event stream ----------------------------------------------------
 
