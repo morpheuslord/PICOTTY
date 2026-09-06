@@ -413,7 +413,7 @@ async def ota_push(request: Request, node_id: str, body: OTAPush):
     hub = hub_of(request)
     if not hub.registry.is_online(node_id):
         return err("node_offline", "node %s is not connected" % node_id)
-    res = hub.ota.start_push(node_id, body.bundle)
+    res = hub.ota.start_push(node_id, body.bundle, body.scope or "all")
     if not res.get("ok"):
         status = 404 if res.get("error") == "no_bundle" else 422
         return JSONResponse(status_code=status, content=res)
@@ -439,7 +439,7 @@ async def ota_rollout(request: Request, body: OTARollout):
     # up to a minute, so run it as a background task and let the UI follow
     # ota_progress events rather than blocking the request.
     asyncio.get_event_loop().create_task(
-        hub.ota.rollout(body.node_ids, body.bundle, body.stagger_ms or 0))
+        hub.ota.rollout(body.node_ids, body.bundle, body.stagger_ms or 0, body.scope or "all"))
     await hub.audit("settings", None, "OTA rollout of %s to %d node(s) started" % (body.bundle, len(body.node_ids)))
     return {"ok": True, "detail": "rollout started; watch ota_progress events", "nodes": body.node_ids}
 

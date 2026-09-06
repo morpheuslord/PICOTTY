@@ -29,7 +29,17 @@ import re
 from . import config
 from .utils import gen_cmd_id, now_ms
 
-CHUNK = 512            # raw bytes per ota_chunk (1024 hex chars << 16 KB frame cap)
+# Raw bytes per ota_chunk. Chunks travel as hex (2x) in a JSON frame, so 4096 raw
+# -> ~8.2 KB on the wire, comfortably under the node's default 16 KB frame cap
+# (MAX_FRAME_BYTES). This is ~8x fewer round-trips than the old 512, the main OTA
+# speed win. Raising it further needs a matching MAX_FRAME_BYTES bump on the node.
+CHUNK = 4096
+# Transfer (begin + chunks) is safe to retry — ota_begin re-wipes staging and
+# nothing is swapped until commit — so a transient link drop mid-transfer restarts
+# cleanly instead of failing the whole push. (Per-CHUNK retry would be unsafe: the
+# node appends chunks non-idempotently, so a re-sent chunk after a lost ack would
+# double-write.) Commit is sent once and never retried.
+PUSH_RETRIES = 3
 BEGIN_TIMEOUT = 20.0
 CHUNK_TIMEOUT = 15.0
 COMMIT_TIMEOUT = 30.0
@@ -41,6 +51,25 @@ _MAX_FILE_BYTES = 1 << 20     # 1 MiB/file — Pico modules are tiny; this is a 
 _MAX_BUNDLE_BYTES = 8 << 20   # 8 MiB total across a bundle
 # Junk that shows up in zips and must never be staged.
 _ZIP_SKIP = ("__MACOSX/", ".DS_Store", "boot_out.txt", "Thumbs.db")
+
+# The one config file on a node. OTA scope filtering keys on it: "firmware" keeps
+# the node's existing settings, "settings" pushes only this.
+SETTINGS_FILE = "settings.toml"
+OTA_SCOPES = ("all", "firmware", "settings")
+
+
+def _scope_files(files: list, scope: str) -> list:
+    """Filter a bundle's manifest files for an OTA push scope:
+      "all"      — every file in the bundle (default; current behavior).
+      "firmware" — everything EXCEPT settings.toml, so a code update keeps the
+                   node's existing configuration untouched.
+      "settings" — ONLY settings.toml, so a config change keeps the node's code.
+    """
+    if scope == "firmware":
+        return [f for f in files if f.get("path") != SETTINGS_FILE]
+    if scope == "settings":
+        return [f for f in files if f.get("path") == SETTINGS_FILE]
+    return list(files)
 
 
 class OTAError(Exception):
@@ -183,49 +212,75 @@ class OTAManager:
             "sent_bytes": job["sent_bytes"], "total_bytes": job["total_bytes"],
         })
 
-    def start_push(self, node_id: str, bundle: str) -> dict:
+    def start_push(self, node_id: str, bundle: str, scope: str = "all") -> dict:
         manifest = self.get_manifest(bundle)
         if manifest is None:
             return {"ok": False, "error": "no_bundle", "detail": "no such bundle %s" % bundle}
         if not self.hub.node_supports(node_id, "ota"):
             return {"ok": False, "error": "unsupported", "detail": "node does not advertise ota"}
+        scope = scope if scope in OTA_SCOPES else "all"
+        files = _scope_files(manifest["files"], scope)
+        if not files:
+            return {"ok": False, "error": "empty_scope",
+                    "detail": "bundle %s has no files for scope %r (a %s push needs %s)" % (
+                        bundle, scope, scope,
+                        "settings.toml in the bundle" if scope == "settings" else "non-settings files")}
         job_id = "ota_" + gen_cmd_id()[2:]
-        total = sum(f["size"] for f in manifest["files"])
-        job = {"job_id": job_id, "node_id": node_id, "bundle": bundle, "status": "running",
+        total = sum(f["size"] for f in files)
+        job = {"job_id": job_id, "node_id": node_id, "bundle": bundle, "scope": scope, "status": "running",
                "phase": "begin", "sent_bytes": 0, "total_bytes": total, "detail": "",
                "started_at": now_ms(), "finished_at": None}
         self._jobs[job_id] = job
-        asyncio.get_event_loop().create_task(self._run_push(job, manifest))
+        asyncio.get_event_loop().create_task(self._run_push(job, manifest, files))
         self._prune()
-        return {"ok": True, "job_id": job_id, "total_bytes": total}
+        return {"ok": True, "job_id": job_id, "total_bytes": total, "scope": scope,
+                "files": [f["path"] for f in files]}
 
-    async def _run_push(self, job, manifest):
+    async def _transfer(self, job, manifest, files):
+        """ota_begin + all chunks for `files`. Returns None on success, else an
+        error string. Safe to call again: ota_begin re-wipes the node's staging."""
+        node_id = job["node_id"]
+        begin = await self.hub.request(node_id, {
+            "type": "ota_begin",
+            "files": [{"path": f["path"], "size": f["size"], "sha256": f["sha256"]} for f in files],
+            "total_sha256": manifest.get("total_sha256"),
+        }, timeout=BEGIN_TIMEOUT)
+        if not begin.get("ok") or begin.get("status") != "ok":
+            return "begin rejected: %s" % (begin.get("payload") or begin.get("error"))
+        self._progress(job, "begin", "manifest accepted (%s)" % job.get("scope", "all"))
+        for f in files:
+            data = self._blob_bytes(manifest["name"], f["blob"])
+            seq = 0
+            for off in range(0, len(data), CHUNK):
+                chunk = data[off:off + CHUNK]
+                r = await self.hub.request(node_id, {
+                    "type": "ota_chunk", "path": f["path"], "seq": seq, "data": chunk.hex(),
+                }, timeout=CHUNK_TIMEOUT)
+                if not r.get("ok") or r.get("status") != "ok":
+                    return "chunk failed on %s: %s" % (f["path"], r.get("payload") or r.get("error"))
+                seq += 1
+                job["sent_bytes"] += len(chunk)
+                self._progress(job, "chunk", "%s %d/%d B" % (f["path"], job["sent_bytes"], job["total_bytes"]))
+        return None
+
+    async def _run_push(self, job, manifest, files):
         node_id = job["node_id"]
         state = self.hub.registry.get(node_id)
         pre_connected = state.connected_at if state else 0
         try:
-            begin = await self.hub.request(node_id, {
-                "type": "ota_begin",
-                "files": [{"path": f["path"], "size": f["size"], "sha256": f["sha256"]} for f in manifest["files"]],
-                "total_sha256": manifest.get("total_sha256"),
-            }, timeout=BEGIN_TIMEOUT)
-            if not begin.get("ok") or begin.get("status") != "ok":
-                return self._fail(job, "begin rejected: %s" % (begin.get("payload") or begin.get("error")))
-            self._progress(job, "begin", "manifest accepted")
-
-            for f in manifest["files"]:
-                data = self._blob_bytes(manifest["name"], f["blob"])
-                seq = 0
-                for off in range(0, len(data), CHUNK):
-                    chunk = data[off:off + CHUNK]
-                    r = await self.hub.request(node_id, {
-                        "type": "ota_chunk", "path": f["path"], "seq": seq, "data": chunk.hex(),
-                    }, timeout=CHUNK_TIMEOUT)
-                    if not r.get("ok") or r.get("status") != "ok":
-                        return self._fail(job, "chunk failed on %s: %s" % (f["path"], r.get("payload") or r.get("error")))
-                    seq += 1
-                    job["sent_bytes"] += len(chunk)
-                    self._progress(job, "chunk", "%s %d/%d B" % (f["path"], job["sent_bytes"], job["total_bytes"]))
+            # Retry the whole transfer on a transient drop — safe because begin
+            # re-wipes staging and nothing is swapped until commit.
+            err = None
+            for attempt in range(PUSH_RETRIES):
+                job["sent_bytes"] = 0
+                err = await self._transfer(job, manifest, files)
+                if err is None:
+                    break
+                if attempt < PUSH_RETRIES - 1:
+                    self._progress(job, "begin", "link hiccup — retrying transfer (%d/%d)" % (attempt + 2, PUSH_RETRIES))
+                    await asyncio.sleep(1.0)
+            if err is not None:
+                return self._fail(job, err)
 
             job["status"] = "committing"
             self._progress(job, "commit", "verifying + swapping on node")
@@ -280,7 +335,7 @@ class OTAManager:
 
     # -- canary bulk rollout --------------------------------------------------
 
-    async def rollout(self, node_ids: list, bundle: str, stagger_ms: int = 0) -> dict:
+    async def rollout(self, node_ids: list, bundle: str, stagger_ms: int = 0, scope: str = "all") -> dict:
         """Update the first node, wait until it is healthy, then the rest one at a
         time (staggered). Aborts the rollout if the canary does not come back."""
         if self.get_manifest(bundle) is None:
@@ -288,7 +343,7 @@ class OTAManager:
         node_ids = list(dict.fromkeys(node_ids))
         started, skipped = [], []
         for i, nid in enumerate(node_ids):
-            res = self.start_push(nid, bundle)
+            res = self.start_push(nid, bundle, scope)
             if not res.get("ok"):
                 skipped.append({"id": nid, "reason": res.get("error")})
                 continue

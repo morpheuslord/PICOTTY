@@ -774,7 +774,10 @@
       helpLink("serial-bridge", "Raw serial bridge"),
       (nodeHasOta(s) ? h("button", { class: "btn btn-secondary", title: "Push a firmware bundle to this node (chunked, checksummed, auto-revert)", disabled: !hasNode, onClick: () => openOtaSheet(s.id) }, "Firmware") : null),  // phase 12
       (nodeHasOta(s) ? helpLink("ota", "OTA firmware updates") : null),
-      h("button", { class: "btn btn-secondary", title: "Move this node between hubs or set its home/pin (dual-hub failover)", "data-tip-help": "failover", disabled: !hasNode, onClick: () => openHubSheet(s.id) }, "Hub"),      // phase 13
+      // Dual-hub: a prominent takeover button when this board is live on a PEER
+      // hub (offline here), plus the general hub-switch control.
+      (s.peerHub ? h("button", { class: "btn btn-secondary", style: "color:var(--color-accent);font-weight:800", title: "Pull " + s.id + " over to THIS hub — it's connected to " + s.peerHub + " right now. Relays the switch to that hub.", "data-tip-help": "failover", onClick: () => openHubSheet(s.id) }, "⤓ Take over") : null),
+      h("button", { class: "btn btn-secondary", title: "Switch this board between its hubs, or set its home/pin (dual-hub failover)", "data-tip-help": "failover", disabled: !hasNode, onClick: () => openHubSheet(s.id) }, "⇄ Switch hub"),      // phase 13
       helpLink("failover", "Dual-hub failover"),
       h("button", { class: "btn btn-secondary", style: "color:var(--color-accent)", title: "Reboot the attached MACHINE / target (NOT the Pico node): serial reboot, Ctrl+Alt+Del, or Magic SysRq — each confirms first", "data-tip-help": "reboot-machine", disabled: !hasNode, onClick: () => openRebootMachineSheet(s.id) }, "Reboot machine"),
       h("button", { class: "btn btn-secondary", style: "color:var(--color-accent-700)", title: "Reboot the Pico NODE (NOT the target machine) — drops its socket briefly", onClick: doRebootNode }, "Reboot node"),
@@ -2010,6 +2013,22 @@
   function openOtaSheet(nodeId) {
     const node = findNode(nodeId) || {};
     let picked = null;
+    let scope = "all";   // all | firmware (keep settings) | settings (keep code)
+    const scopeHost = h("div", { style: "display:flex;flex-direction:column;gap:6px" });
+    function renderScope() {
+      scopeHost.innerHTML = "";
+      const opts = [["all", "Everything", "code + settings.toml"],
+                    ["firmware", "Firmware only", "update code — keep the node's existing settings"],
+                    ["settings", "Settings only", "update settings.toml — keep the node's code"]];
+      for (const [val, label, desc] of opts) {
+        const on = scope === val;
+        scopeHost.appendChild(h("label", { style: "display:flex;gap:10px;align-items:flex-start;padding:7px 10px;border:1px solid var(--color-divider);cursor:pointer;background:" + (on ? "var(--color-surface)" : "transparent"),
+          onClick: () => { scope = val; renderScope(); } },
+          h("input", { type: "radio", name: "otascope", checked: on, style: "accent-color:var(--color-accent);flex:none;margin-top:2px" }),
+          h("div", { style: "min-width:0" }, h("div", { style: "font-size:13px;font-weight:600" }, label),
+            h("div", { style: "font-size:11px;color:var(--color-neutral-600)" }, desc))));
+      }
+    }
     const listHost = h("div", { class: "sc-scroll", style: "max-height:200px;overflow-y:auto;border:1px solid var(--color-divider)" });
     const progressHost = h("div", {});
     const updateBtn = h("button", { class: "btn btn-primary", title: "Flash the selected bundle to " + nodeId + " — it reboots and must report healthy to confirm", onClick: () => run() }, "Update firmware");
@@ -2040,11 +2059,11 @@
       if ((findNode(nodeId) || {}).status !== "online") { toast("Failed", nodeId + " is offline"); return; }
       if (state.demo) { runOtaDemo(nodeId, picked); return; }
       try {
-        const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/ota", { bundle: picked });
+        const r = await postJSON("/nodes/" + encodeURIComponent(nodeId) + "/ota", { bundle: picked, scope });
         if (r.ok) {
           state.otaJobs[nodeId] = { job_id: r.job_id, bundle: picked, status: "running", phase: "begin", sent_bytes: 0, total_bytes: r.total_bytes || 0, detail: "" };
           renderProgress(); if (nodeId === state.selId) renderOtaBar();
-          toast("OTA", "update started on " + nodeId);
+          toast("OTA", "update started on " + nodeId + (scope !== "all" ? " (" + scope + " only)" : ""));
           pollOta(nodeId, r.job_id);
         } else toast("Failed", r.detail || r.error || "ota rejected");
       } catch (e) { toast("Failed", "ota request error"); }
@@ -2054,6 +2073,7 @@
       h("div", { style: "display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-neutral-700)" }, h("span", {}, "Push a firmware bundle to "), h("b", {}, nodeId),
         h("span", {}, ". The Pico flashes, reboots and must report "), h("b", {}, "healthy"), h("span", {}, " to confirm; a canary rollout can update a whole group."), helpLink("ota", "OTA firmware updates")),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Bundle"), listHost),
+      h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Update scope"), scopeHost),
       h("div", { style: "display:flex;flex-direction:column;gap:6px" }, kicker("Progress"), progressHost));
 
     openSheet("ota-sheet", "Update firmware — " + nodeId, body,
@@ -2065,6 +2085,7 @@
     if (bd) bd.addEventListener("click", (e) => { if (e.target === bd) otaSheetHooks = null; });
     otaSheetHooks = { nodeId, render: renderProgress };
     renderBundles();
+    renderScope();
     renderProgress();
   }
   function closeOtaSheet() { otaSheetHooks = null; closeSheet("ota-sheet"); }

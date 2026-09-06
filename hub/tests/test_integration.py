@@ -471,6 +471,41 @@ async def checks():
     record("phase10 zip-strips-topdir-and-junk",
            set(paths) == {"boot.py", "code.py"}, "paths=%s" % paths)
 
+    # --- Phase 10b: OTA scope (firmware-only / settings-only) ------------
+    http("POST", "/ota/bundles", {"name": "scopetest", "files": [
+        {"path": "code.py", "content_b64": _b64.b64encode(b"print('code')\n").decode()},
+        {"path": "settings.toml", "content_b64": _b64.b64encode(b"NODE_ID='x'\n").decode()},
+    ]})
+    scn = DriverNode("127.0.0.1", TCP_PORT, "drv-scope", TOKEN, caps=["hid", "cdc", "ota"])
+    await scn.connect()
+    await wait_for(lambda: get_node("drv-scope").get("status") == "online")
+
+    async def _begin_paths(node, scope):
+        st, b = http("POST", "/nodes/drv-scope/ota", {"bundle": "scopetest", "scope": scope})
+        f = await node.expect_frame(lambda fr: fr.get("type") == "ota_begin", timeout=6)
+        pths = [x["path"] for x in f.get("files", [])]
+        await node.send({"type": "result", "cmd_id": f["cmd_id"], "status": "ok"})
+        try:  # drain chunks + commit so the job settles
+            while True:
+                g = await node.expect_frame(lambda fr: fr.get("type") in ("ota_chunk", "ota_commit"), timeout=4)
+                await node.send({"type": "result", "cmd_id": g["cmd_id"], "status": "ok"})
+                if g["type"] == "ota_commit":
+                    break
+        except Exception:
+            pass
+        return b, pths
+
+    _, fw_paths = await _begin_paths(scn, "firmware")
+    record("ota scope firmware-only keeps settings", "settings.toml" not in fw_paths and "code.py" in fw_paths, str(fw_paths))
+    _, set_paths = await _begin_paths(scn, "settings")
+    record("ota scope settings-only", set_paths == ["settings.toml"], str(set_paths))
+    # A firmware-only push on a settings-only bundle has nothing to send -> 422.
+    http("POST", "/ota/bundles", {"name": "settingsonly", "files": [
+        {"path": "settings.toml", "content_b64": _b64.b64encode(b"X=1\n").decode()}]})
+    st_e, b_e = http("POST", "/nodes/drv-scope/ota", {"bundle": "settingsonly", "scope": "firmware"})
+    record("ota scope empty -> 422", st_e == 422 and b_e.get("error") == "empty_scope", "st=%s err=%s" % (st_e, b_e.get("error")))
+    await scn.close()
+
     # --- SysRq reboot + custom chords ------------------------------------
     sn = DriverNode("127.0.0.1", TCP_PORT, "drv-sysrq", TOKEN)
     await sn.connect()

@@ -184,7 +184,7 @@ sequenceDiagram
     Op->>Hub: Push bundle to node
     Hub->>Node: ota_begin {files[path,size,sha256], total_sha256}
     Node-->>Hub: ok — staging opened, one file per entry
-    loop each file, in 512 B chunks
+    loop each file, in 4 KB chunks
         Hub->>Node: ota_chunk {path, seq, data as hex}
         Node-->>Hub: ok — appended to staging, running hash updated
     end
@@ -203,11 +203,45 @@ Three node commands carry a bundle, designed to stream without growing memory:
 | `ota_chunk` | `{path, seq, data}` (`data` is hex) | Appends the chunk to that file's staging area and updates its running hash. |
 | `ota_commit` | `{}` | Verifies every file's size + SHA-256, swaps in with `.bak` backups, writes the pending marker, reloads. |
 
-Chunks are small (kept in the ~512 B–1 KB range) and written straight to a
-staging file, so a large bundle never grows the heap. The cooperative loop keeps
-feeding the watchdog between chunk frames exactly as it does for serial output —
-filesystem writes on CircuitPython can be slow, so the work is budgeted the same
-way `drain_tx` budgets serial writes.
+Chunks are **4 KB** raw (≈8 KB as hex, under the node's 16 KB frame cap) and
+written straight to a staging file, so a large bundle never grows the heap. The
+cooperative loop keeps feeding the watchdog between chunk frames exactly as it does
+for serial output — filesystem writes on CircuitPython can be slow, so the work is
+budgeted the same way `drain_tx` budgets serial writes.
+
+**Resilient transfer.** A transient link drop *during* begin/chunk retries the
+whole transfer (up to a few times) rather than failing the push — this is safe
+because `ota_begin` re-wipes staging and nothing is swapped until commit. Commit
+itself is sent once and never retried (see the safety model above).
+
+## Scoped pushes: firmware-only / settings-only
+
+A push takes a **scope** so you can update code and configuration independently —
+the hub simply filters which files of the bundle it sends, and the node writes
+exactly what it receives (no firmware change needed):
+
+| Scope | Sends | Use |
+|---|---|---|
+| `all` (default) | every file in the bundle | a full deploy |
+| `firmware` | everything **except** `settings.toml` | update the code, **keep each node's existing config** |
+| `settings` | **only** `settings.toml` | change config, **keep the running code** |
+
+```bash
+# update code on a node, leaving its settings.toml alone
+curl -X POST http://hub:8080/api/nodes/Node-IC2/ota \
+     -H 'Content-Type: application/json' \
+     -d '{"bundle":"Node-IC2-dualhub","scope":"firmware"}'
+
+# push only settings.toml (e.g. retune HUB_FAILOVER_TRIES) — code untouched
+curl ... -d '{"bundle":"Node-IC2-dualhub","scope":"settings"}'
+```
+
+In the dashboard the **Update firmware** sheet has an **Update scope** selector
+(Everything / Firmware only / Settings only). A push whose scope leaves nothing to
+send (e.g. `firmware` on a settings-only bundle) is rejected with `empty_scope`.
+`POST /api/bulk/ota` takes the same `scope`. Because a settings-only push carries
+just one small file, it's the way to retune a board's timing/failover knobs
+without reflashing code.
 
 The reload uses the same `supervisor.reload()` soft-reload path as `reboot`: it
 restarts the firmware **without** re-enumerating USB, so the target keeps seeing

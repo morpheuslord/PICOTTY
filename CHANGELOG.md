@@ -2,11 +2,29 @@
 
 All notable changes to PICOTTY. This project adheres to [Semantic Versioning](https://semver.org).
 
-## v1.1.0 — 2026-08-22
+## v1.2.0 — 2026-09-06
 
-Two features: a board can now be served by **two hubs** with automatic failover
-and runtime source-selection, and the **Telegram bot** gains a much larger command
-surface.
+A board can now be served by **two hubs** with automatic failover and runtime
+source-selection; the **Telegram bot** gains a much larger command surface and a
+button-driven UI; and **OTA** gets firmware-only / settings-only pushes plus a big
+speed-up.
+
+### Added — OTA firmware-only / settings-only + faster, more resilient pushes
+
+- **Scoped pushes.** An OTA push now takes a **scope**: `all` (default),
+  `firmware` (everything *except* `settings.toml` — update the code, keep each
+  node's existing config) or `settings` (only `settings.toml` — change config,
+  keep the code). Exposed in the dashboard's Update-firmware sheet, on
+  `POST /api/nodes/{id}/ota` and `/api/bulk/ota` (`scope`), and in the OTA manager.
+  Works with existing nodes — the node writes exactly the files the hub sends, so
+  no firmware change is needed. (Tip: a `settings`-only push is how you retune a
+  board's `HUB_FAILOVER_TRIES`/timings without reflashing code.)
+- **~8× faster.** The OTA chunk size went from 512 B to 4096 B (still well under
+  the node's 16 KB frame cap), cutting round-trips.
+- **Resilient transfer.** A transient link drop mid-transfer now retries the whole
+  transfer (safe — `ota_begin` re-wipes staging and nothing is swapped until
+  commit) instead of failing the push; commit is still one-shot, checksum-verified,
+  with `.bak`/watchdog auto-revert.
 
 ### Added — dual-hub failover
 
@@ -36,7 +54,7 @@ board** — so a dead main hub no longer means losing the fleet. See
   the welcome frame; a node's reported hub label is surfaced in the node API and on
   the dashboard (a "via &lt;label&gt;" badge). Node firmware bumped to **1.3.0**.
 
-### Added — richer Telegram bot (picotty-telegram 1.2.0)
+### Added — richer Telegram bot (picotty-telegram 1.3.0)
 
 Surfaced hub capabilities that were REST-ready but had no chat command:
 
@@ -112,11 +130,11 @@ to `b` (reboot).
 
 ### Verified
 
-Firmware selector **12/12** host unit; hub 7/7 db + **58/58** integration (welcome
-frame, hub-label, directive endpoint) + **5/5** two-hub relay (cross-hub takeover,
-peer visibility, loop guard); sidecar **27/27** unit (incl. hub-failover + source
-select) + wiring smoke + **18/18** end-to-end through `picotty.client`. No
-regressions.
+Firmware selector **12/12** host unit; hub 7/7 db + **61/61** integration (welcome
+frame, hub-label, directive endpoint, OTA firmware/settings scope) + **5/5**
+two-hub relay (cross-hub takeover, peer visibility, loop guard); sidecar **28/28**
+unit (hub-failover, source select, button-menu callback scheme) + wiring smoke +
+**18/18** end-to-end through `picotty.client`. No regressions.
 
 ## v1.0.3 — 2026-08-12
 

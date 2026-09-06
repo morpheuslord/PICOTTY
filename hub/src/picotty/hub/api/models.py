@@ -127,12 +127,16 @@ class OTABundleZip(BaseModel):
 
 class OTAPush(BaseModel):
     bundle: str
+    # Which files to write: "all" (default), "firmware" (everything except
+    # settings.toml — keep the node's config), or "settings" (only settings.toml).
+    scope: Optional[str] = "all"
 
 
 class OTARollout(BaseModel):
     node_ids: List[str]
     bundle: str
     stagger_ms: Optional[int] = 0
+    scope: Optional[str] = "all"
 
 
 class SettingsPatch(BaseModel):
