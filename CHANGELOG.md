@@ -4,10 +4,8 @@ All notable changes to PICOTTY. This project adheres to [Semantic Versioning](ht
 
 ## v1.2.0 — 2026-09-06
 
-A board can now be served by **two hubs** with automatic failover and runtime
-source-selection; the **Telegram bot** gains a much larger command surface and a
-button-driven UI; and **OTA** gets firmware-only / settings-only pushes plus a big
-speed-up.
+Building on 1.1.0's dual-hub work: **OTA** gains firmware-only / settings-only
+pushes plus a big speed-up, and the **Telegram bot** becomes button-driven.
 
 ### Added — OTA firmware-only / settings-only + faster, more resilient pushes
 
@@ -25,6 +23,49 @@ speed-up.
   transfer (safe — `ota_begin` re-wipes staging and nothing is swapped until
   commit) instead of failing the push; commit is still one-shot, checksum-verified,
   with `.bak`/watchdog auto-revert.
+
+### Added — Telegram button UI (picotty-telegram 1.3.0)
+
+The bot is now **tap-driven**, not type-driven. **`/menu`** (and `/start`) opens an
+inline-keyboard home screen — Status, Nodes, Telemetry, Events, Fleet, Alerts,
+Source hub, Arm — and everything drills down by tapping:
+
+- **Nodes → node detail** with action buttons: Ping, Read, Telemetry, Log, Mute,
+  and (when armed) Shell, Reboot (confirm step), SysRq (key picker), Move hub.
+- **Fleet** → Macros / Runbooks as buttons, then a "run on ALL online / this node"
+  target picker.
+- **Source hub** switch and per-node hub steering are button flows too.
+- **Arm** by tapping 🔒 then sending your TOTP code (no `/arm` needed).
+- **Context memory**: the bot remembers your selected node and the pending prompt,
+  so buttons act without re-typing ids; the home screen shows live hub/online/armed
+  status. Every typed command still works.
+
+### Changed — clearer hub-switch controls
+
+The dashboard's dual-hub control is now a prominent **⤓ Take over** button when a
+board is live on a peer hub, alongside a clearly-labelled **⇄ Switch hub** control
+(it was previously just an unlabelled "Hub" button).
+
+### Fixed — Magic SysRq chord
+
+The **Alt+SysRq+B** quick-chord (and any custom chord naming SysRq) was sent as a
+plain HID chord, which failed on the node with `unknown keycode: 'SYSRQ'` (SysRq is
+the PrintScreen key, and it must be held while the command key is tapped). Such
+chords now route to the dedicated `/sysrq` command, which does the correct timing.
+Also fixed `HubClient.sysrq()` sending the key under the wrong field (`command`
+instead of `key`), so a Telegram `/sysrq <node> <key>` no longer silently defaulted
+to `b` (reboot).
+
+### Verified
+
+Hub 7/7 db + **61/61** integration (incl. OTA firmware/settings scope + empty→422);
+sidecar **28/28** unit (incl. the button-menu callback scheme) + wiring smoke; no
+regressions.
+
+## v1.1.0 — 2026-08-22
+
+A board can now be served by **two hubs** with automatic failover and runtime
+source-selection, and the **Telegram bot** gains a much larger command surface.
 
 ### Added — dual-hub failover
 
@@ -54,7 +95,7 @@ board** — so a dead main hub no longer means losing the fleet. See
   the welcome frame; a node's reported hub label is surfaced in the node API and on
   the dashboard (a "via &lt;label&gt;" badge). Node firmware bumped to **1.3.0**.
 
-### Added — richer Telegram bot (picotty-telegram 1.3.0)
+### Added — richer Telegram bot (picotty-telegram 1.2.0)
 
 Surfaced hub capabilities that were REST-ready but had no chat command:
 
@@ -84,22 +125,6 @@ steer it. New **`HUB_PEERS`** (comma-separated peer hub URLs) closes the gap:
   the primary. Relayed calls are never relayed again (loop-safe). Peer calls
   assume a trusted management VLAN (no auth), matching the node-token posture.
 
-### Added — Telegram button UI
-
-The bot is now **tap-driven**, not type-driven. **`/menu`** (and `/start`) opens an
-inline-keyboard home screen — Status, Nodes, Telemetry, Events, Fleet, Alerts,
-Source hub, Arm — and everything drills down by tapping:
-
-- **Nodes → node detail** with action buttons: Ping, Read, Telemetry, Log, Mute,
-  and (when armed) Shell, Reboot (confirm step), SysRq (key picker), Move hub.
-- **Fleet** → Macros / Runbooks as buttons, then a "run on ALL online / this node"
-  target picker.
-- **Source hub** switch and per-node hub steering are button flows too.
-- **Arm** by tapping 🔒 then sending your TOTP code (no `/arm` needed).
-- **Context memory**: the bot remembers your selected node and the pending prompt,
-  so buttons act without re-typing ids; the home screen shows live hub/online/armed
-  status. Every typed command still works.
-
 ### Added — Telegram sidecar dual-hub
 
 - **The bot fails over between hubs.** Set `HUB_BASE_URL_BACKUP` and the sidecar
@@ -118,23 +143,12 @@ stack with the console kept usably tall on narrow screens, with the page scrolli
 instead of clipping. The node header is a vertical stack (info above a wrapping
 action toolbar) so the info no longer collapses under the buttons.
 
-### Fixed — Magic SysRq chord
-
-The **Alt+SysRq+B** quick-chord (and any custom chord naming SysRq) was sent as a
-plain HID chord, which failed on the node with `unknown keycode: 'SYSRQ'` (SysRq is
-the PrintScreen key, and it must be held while the command key is tapped). Such
-chords now route to the dedicated `/sysrq` command, which does the correct timing.
-Also fixed `HubClient.sysrq()` sending the key under the wrong field (`command`
-instead of `key`), so a Telegram `/sysrq <node> <key>` no longer silently defaulted
-to `b` (reboot).
-
 ### Verified
 
-Firmware selector **12/12** host unit; hub 7/7 db + **61/61** integration (welcome
-frame, hub-label, directive endpoint, OTA firmware/settings scope) + **5/5**
-two-hub relay (cross-hub takeover, peer visibility, loop guard); sidecar **28/28**
-unit (hub-failover, source select, button-menu callback scheme) + wiring smoke +
-**18/18** end-to-end through `picotty.client`. No regressions.
+Firmware selector **12/12** host unit; hub 7/7 db + **58/58** integration (welcome
+frame, hub-label, directive endpoint) + **5/5** two-hub relay (cross-hub takeover,
+peer visibility, loop guard); sidecar **27/27** unit (hub-failover + source select)
++ wiring smoke + **18/18** end-to-end through `picotty.client`. No regressions.
 
 ## v1.0.3 — 2026-08-12
 
