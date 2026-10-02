@@ -53,9 +53,9 @@ picotty-hub = "picotty.hub.main:main"
 picotty-sim = "picotty.sim:main"
 
 [project.urls]
-Homepage = "https://github.com/morpheuslord/PICOTTY"
+Homepage = "https://morpheuslord.github.io/PICOTTY/"
 Repository = "https://github.com/morpheuslord/PICOTTY"
-Documentation = "https://github.com/morpheuslord/PICOTTY/tree/main/docs"
+Documentation = "https://morpheuslord.github.io/PICOTTY/"
 Issues = "https://github.com/morpheuslord/PICOTTY/issues"
 
 # Dev tooling lives in a uv dependency group, NOT an extra, so it never leaks
