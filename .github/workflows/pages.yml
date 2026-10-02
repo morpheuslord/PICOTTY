@@ -1,0 +1,51 @@
+# Deploy the explainer / docs landing page (site/) to GitHub Pages.
+#
+# ONE-TIME SETUP:
+#   GitHub -> Settings -> Pages -> "Build and deployment" -> Source: GitHub Actions.
+# The published site is served at https://morpheuslord.github.io/PICOTTY/ and is
+# linked from the picotty PyPI project (Homepage) and the README.
+
+name: Deploy site to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    # Only rebuild when the page (or this workflow) actually changes.
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Least privilege: read the repo, mint an OIDC token, and write the Pages deploy.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; let an in-flight run finish rather than cancel it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & deploy static site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      # site/ is plain static HTML (no build step) — upload it as-is.
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

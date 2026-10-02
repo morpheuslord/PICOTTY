@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PICOTTY — a networked serial console for headless machines</title>
+<meta name="description" content="PICOTTY (Pico TeleTYpewriter) — a star-topology networked serial console with USB HID keyboard injection for a fleet of headless machines. Hub server, client SDK, and CircuitPython node firmware.">
+<link rel="canonical" href="https://morpheuslord.github.io/PICOTTY/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PICOTTY — a teletype for machines that forgot they had a keyboard">
+<meta property="og:description" content="A networked serial console with USB HID keyboard injection for a fleet of headless machines — one hub, a swarm of Raspberry Pi Pico nodes, one browser dashboard.">
+<meta property="og:url" content="https://morpheuslord.github.io/PICOTTY/">
+<meta name="theme-color" content="#B4521C">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* reset */
+  :root{color-scheme:light}
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0}
+  img{max-width:100%}
+  [hidden]{display:none!important}
+
+  :root{
+    --paper:#F3EEE1; --paper-2:#EAE3D1; --panel:#FBF8F0;
+    --ink:#211C15; --ink-soft:#5B5346; --ink-faint:#8A8273;
+    --rule:#D6CCB6; --rule-soft:#E4DCCB;
+    --accent:#B4521C; --accent-ink:#8A3C12; --accent-soft:rgba(180,82,28,.11);
+    --signal:#3C7A4E; --signal-soft:rgba(60,122,78,.13);
+    --shadow:rgba(33,28,21,.11);
+    --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#0F1412; --paper-2:#131B18; --panel:#141C19;
+      --ink:#E7E3D5; --ink-soft:#A3AC9F; --ink-faint:#6E776C;
+      --rule:#263029; --rule-soft:#1E2621;
+      --accent:#E9A94A; --accent-ink:#F0BB6B; --accent-soft:rgba(233,169,74,.13);
+      --signal:#74CE92; --signal-soft:rgba(116,206,146,.14);
+      --shadow:rgba(0,0,0,.4);
+      color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0F1412; --paper-2:#131B18; --panel:#141C19;
+    --ink:#E7E3D5; --ink-soft:#A3AC9F; --ink-faint:#6E776C;
+    --rule:#263029; --rule-soft:#1E2621;
+    --accent:#E9A94A; --accent-ink:#F0BB6B; --accent-soft:rgba(233,169,74,.13);
+    --signal:#74CE92; --signal-soft:rgba(116,206,146,.14);
+    --shadow:rgba(0,0,0,.4);
+    color-scheme:dark;
+  }
+
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;letter-spacing:.005em}
+  .wrap{max-width:860px;margin:0 auto;padding-inline:20px}
+  a{color:var(--accent-ink);text-underline-offset:3px;text-decoration-thickness:1px}
+  h1,h2,h3{text-wrap:balance;line-height:1.18;margin:0}
+  p{margin:0}
+  ::selection{background:var(--accent-soft)}
+
+  .eyebrow{font-family:var(--mono);font-size:.72rem;font-weight:500;
+    letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin:0}
+
+  .bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;
+    background:color-mix(in srgb,var(--paper) 86%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--rule)}
+  .bar-in{max-width:860px;margin:0 auto;padding:11px 20px;
+    display:flex;align-items:center;gap:14px}
+  .brand{font-family:var(--mono);font-weight:600;letter-spacing:.14em;
+    font-size:.92rem;display:flex;align-items:center;gap:9px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--signal);
+    box-shadow:0 0 0 3px var(--signal-soft);animation:blink 2.4s steps(1) infinite}
+  @keyframes blink{0%,70%{opacity:1}71%,100%{opacity:.25}}
+  .bar-links{margin-left:auto;display:flex;align-items:center;gap:4px;
+    font-family:var(--mono);font-size:.78rem}
+  .bar-links a{padding:5px 9px;border-radius:5px;text-decoration:none;color:var(--ink-soft)}
+  .bar-links a:hover{background:var(--accent-soft);color:var(--accent-ink)}
+  .theme-btn{font-family:var(--mono);font-size:.72rem;cursor:pointer;
+    background:none;border:1px solid var(--rule);color:var(--ink-soft);
+    padding:5px 9px;border-radius:5px}
+  .theme-btn:hover{border-color:var(--accent);color:var(--accent-ink)}
+
+  .hero{padding-block:62px 40px}
+  .hero .wordmark{font-family:var(--mono);font-weight:600;letter-spacing:.02em;
+    font-size:clamp(2.7rem,10vw,4.6rem);line-height:.98;margin:0 0 6px}
+  .hero .expand{font-family:var(--mono);font-size:.82rem;letter-spacing:.06em;
+    color:var(--ink-faint);margin-bottom:26px}
+  .hero .expand b{color:var(--accent);font-weight:500}
+  .teletype{font-family:var(--mono);font-size:clamp(1rem,2.9vw,1.28rem);
+    color:var(--ink);background:var(--panel);border:1px solid var(--rule);
+    border-radius:9px;padding:18px 20px;box-shadow:0 1px 0 var(--rule);
+    min-height:3.4em;display:flex;align-items:center}
+  .teletype .pre{color:var(--signal);margin-right:.6ch}
+  .cursor{display:inline-block;width:.6ch;height:1.15em;background:var(--accent);
+    margin-left:1px;transform:translateY(.16em);animation:caret 1s steps(1) infinite}
+  @keyframes caret{50%{opacity:0}}
+  .lede{font-size:1.14rem;color:var(--ink-soft);margin-top:26px;max-width:62ch}
+  .lede b{color:var(--ink);font-weight:600}
+  .cta{display:flex;flex-wrap:wrap;gap:11px;margin-top:28px}
+  .btn{font-family:var(--mono);font-size:.84rem;font-weight:500;text-decoration:none;
+    padding:11px 17px;border-radius:7px;display:inline-flex;align-items:center;gap:8px;
+    border:1px solid transparent;transition:transform .08s ease}
+  .btn:active{transform:translateY(1px)}
+  .btn-pri{background:var(--accent);color:#1a1206}
+  .btn-pri:hover{filter:brightness(1.07)}
+  .btn-sec{border-color:var(--rule);color:var(--ink);background:var(--panel)}
+  .btn-sec:hover{border-color:var(--accent);color:var(--accent-ink)}
+
+  .notice{margin-top:30px;border-left:3px solid var(--accent);
+    background:var(--accent-soft);padding:13px 17px;border-radius:0 7px 7px 0;
+    font-size:.95rem;color:var(--ink-soft)}
+  .notice b{color:var(--ink)}
+
+  section{padding-block:46px;border-top:1px solid var(--rule-soft)}
+  .sec-head{margin-bottom:26px}
+  .sec-head h2{font-size:clamp(1.5rem,4vw,2rem);margin-top:10px}
+  .sec-head p{color:var(--ink-soft);margin-top:12px;max-width:64ch}
+
+  .feat{display:grid;grid-template-columns:1fr 1fr;gap:1px;
+    background:var(--rule-soft);border:1px solid var(--rule-soft);border-radius:10px;overflow:hidden}
+  .feat .cell{background:var(--paper);padding:20px 20px 22px}
+  .feat .cell h3{font-family:var(--mono);font-size:.95rem;font-weight:600;
+    display:flex;align-items:center;gap:9px;margin-bottom:8px}
+  .feat .cell h3 .g{color:var(--accent);font-size:1.05rem;line-height:1}
+  .feat .cell p{font-size:.92rem;color:var(--ink-soft)}
+  @media (max-width:560px){.feat{grid-template-columns:1fr}}
+
+  .diagram-box{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;
+    background:var(--panel);padding:22px 18px}
+  .diagram-box svg{display:block;min-width:620px;margin:0 auto;height:auto;max-width:100%}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;
+    font-family:var(--mono);font-size:.76rem;color:var(--ink-soft)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .legend i{width:22px;height:0;border-top:2px solid var(--accent);display:inline-block}
+  .legend i.wire{border-top-style:solid}
+  .legend i.usb{border-top-style:dashed;border-color:var(--signal)}
+
+  .surf{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .surf .card{border:1px solid var(--rule);border-radius:9px;background:var(--panel);padding:16px 15px}
+  .surf .card code{font-family:var(--mono);font-size:.84rem;color:var(--accent-ink);font-weight:500}
+  .surf .card p{font-size:.86rem;color:var(--ink-soft);margin-top:7px}
+  .surf .card .need{font-family:var(--mono);font-size:.7rem;color:var(--ink-faint);
+    margin-top:10px;letter-spacing:.04em;text-transform:uppercase}
+  @media (max-width:620px){.surf{grid-template-columns:1fr}}
+
+  .step{display:grid;grid-template-columns:auto 1fr;gap:18px;padding-block:18px;
+    border-top:1px dashed var(--rule)}
+  .step:first-of-type{border-top:none}
+  .step .n{font-family:var(--mono);font-weight:600;font-size:.85rem;color:var(--accent);
+    border:1px solid var(--accent);border-radius:50%;width:30px;height:30px;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+  .step h3{font-size:1.06rem;margin-bottom:4px}
+  .step .where{font-family:var(--mono);font-size:.74rem;color:var(--ink-faint);
+    letter-spacing:.05em;text-transform:uppercase;margin-bottom:12px}
+
+  .code{position:relative;background:var(--panel);border:1px solid var(--rule);
+    border-radius:9px;margin-top:6px}
+  .code pre{margin:0;overflow-x:auto;padding:15px 16px;font-family:var(--mono);
+    font-size:.84rem;line-height:1.75;color:var(--ink)}
+  .code .cmt{color:var(--ink-faint)}
+  .code .cm2{color:var(--signal)}
+  .copy{position:absolute;top:9px;right:9px;font-family:var(--mono);font-size:.68rem;
+    cursor:pointer;background:var(--paper);border:1px solid var(--rule);color:var(--ink-soft);
+    padding:4px 9px;border-radius:5px;letter-spacing:.05em}
+  .copy:hover{border-color:var(--accent);color:var(--accent-ink)}
+  .copy.ok{color:var(--signal);border-color:var(--signal)}
+
+  .pkg{border:1px solid var(--rule);border-radius:11px;background:var(--panel);
+    padding:22px;display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center}
+  .pkg .meta{min-width:0}
+  .pkg .pname{font-family:var(--mono);font-weight:600;font-size:1.3rem}
+  .pkg .pname .v{color:var(--accent);font-size:.9rem;margin-left:8px}
+  .pkg .pills{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px}
+  .pkg .pill{font-family:var(--mono);font-size:.7rem;color:var(--ink-soft);
+    border:1px solid var(--rule);border-radius:20px;padding:3px 10px;letter-spacing:.03em}
+  .pkg .plinks{display:flex;flex-direction:column;gap:8px}
+  @media (max-width:560px){.pkg{grid-template-columns:1fr}}
+
+  .docs{border:1px solid var(--rule-soft);border-radius:10px;overflow:hidden}
+  .docrow{display:grid;grid-template-columns:200px 1fr;gap:16px;padding:13px 17px;
+    border-top:1px solid var(--rule-soft);align-items:baseline}
+  .docrow:first-child{border-top:none}
+  .docrow a{font-family:var(--mono);font-size:.84rem;font-weight:500;text-decoration:none}
+  .docrow a:hover{text-decoration:underline}
+  .docrow p{font-size:.88rem;color:var(--ink-soft)}
+  @media (max-width:560px){.docrow{grid-template-columns:1fr;gap:3px}}
+
+  footer{border-top:1px solid var(--rule);padding-block:40px 60px;margin-top:10px}
+  .foot-grid{display:flex;flex-wrap:wrap;gap:30px;justify-content:space-between}
+  .foot-grid .col h4{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--ink-faint);margin-bottom:11px}
+  .foot-grid .col a{display:block;font-size:.9rem;color:var(--ink-soft);
+    text-decoration:none;padding:3px 0}
+  .foot-grid .col a:hover{color:var(--accent-ink)}
+  .sign{font-family:var(--mono);font-size:.78rem;color:var(--ink-faint);
+    margin-top:34px;border-top:1px dashed var(--rule);padding-top:20px}
+  .sign .em{color:var(--accent)}
+
+  @media (prefers-reduced-motion:reduce){
+    .dot,.cursor{animation:none}
+  }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-in">
+    <span class="brand"><span class="dot" aria-hidden="true"></span>PICOTTY</span>
+    <nav class="bar-links">
+      <a href="#how">How</a>
+      <a href="#features">Features</a>
+      <a href="#start">Install</a>
+      <a href="https://github.com/morpheuslord/PICOTTY" target="_blank" rel="noopener">GitHub ↗</a>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="Toggle theme">◐ theme</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <!-- HERO -->
+    <section class="hero" style="border-top:none">
+      <p class="eyebrow">Pico · TeleTYpewriter</p>
+      <h1 class="wordmark">PICOTTY</h1>
+      <p class="expand">an archaic telex reborn as a <b>networked serial console</b></p>
+
+      <div class="teletype" aria-label="PICOTTY tagline">
+        <span class="pre">&gt;</span><span id="tt"></span><span class="cursor" aria-hidden="true"></span>
+      </div>
+
+      <p class="lede">A star-topology serial console for a fleet of Raspberry&nbsp;Pi&nbsp;Pico nodes.
+        Each node plugs into a headless machine's USB port and becomes a
+        <b>networked serial console with keyboard injection</b> — it reads the target's
+        serial line over the network and types keystrokes back into it. One hub coordinates
+        the swarm and gives you a single browser dashboard to drive every node.</p>
+
+      <div class="cta">
+        <a class="btn btn-pri" href="#start">⌁ Get started</a>
+        <a class="btn btn-sec" href="https://pypi.org/project/picotty/" target="_blank" rel="noopener">PyPI: picotty ↗</a>
+        <a class="btn btn-sec" href="https://github.com/morpheuslord/PICOTTY" target="_blank" rel="noopener">Source ↗</a>
+      </div>
+
+      <div class="notice">
+        <b>This is a serial console, not a KVM.</b> There is no video capture. Each node reads
+        what the target emits on its serial line and types back into it — so reading output
+        depends on the target actually having a serial console configured.
+      </div>
+    </section>
+
+    <!-- WHY -->
+    <section id="why">
+      <div class="sec-head">
+        <p class="eyebrow">Why it exists</p>
+        <h2>Lights-out management a rack of mini&nbsp;PCs never shipped with</h2>
+        <p>Consumer mini PCs expose <b>no accessible serial port</b> — no BMC/IPMI, no DB9/RJ45
+          console, often not even a usable header. There's no out-of-band way to see a stuck boot,
+          poke a frozen box, catch a kernel panic, or drive the BIOS without walking over with a
+          keyboard and monitor.</p>
+      </div>
+      <p style="color:var(--ink-soft);max-width:64ch">PICOTTY gives every headless machine exactly
+        that, over the network: a tiny Pico on its USB port acts as a USB keyboard — so you can
+        type at BIOS, GRUB, initramfs, and the OS — and reads back its serial console, all surfaced
+        in one dashboard.</p>
+    </section>
+
+    <!-- HOW / DIAGRAM -->
+    <section id="how">
+      <div class="sec-head">
+        <p class="eyebrow">The topology</p>
+        <h2>One hub, a swarm of nodes, one dashboard</h2>
+        <p>A shared Raspberry&nbsp;Pi&nbsp;Zero&nbsp;2&nbsp;W runs the hub. Each node is a Pico on a
+          target's USB port, reachable over your management network. You drive the whole fleet from
+          a browser — or from your phone via the Telegram sidecar.</p>
+      </div>
+
+      <div class="diagram-box">
+        <svg viewBox="0 0 620 300" role="img" aria-label="Operator and Telegram talk to the hub over HTTP and WebSocket; the hub talks to each Pico node over the wire protocol; each node drives its target machine over USB HID and reads its serial console.">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+            </marker>
+            <marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--signal)"/>
+            </marker>
+          </defs>
+
+          <!-- wires: operator-hub -->
+          <line x1="118" y1="112" x2="238" y2="150" stroke="var(--accent)" stroke-width="2" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <line x1="118" y1="196" x2="238" y2="158" stroke="var(--accent)" stroke-width="2" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <!-- wires: hub-nodes -->
+          <line x1="362" y1="150" x2="470" y2="60" stroke="var(--accent)" stroke-width="2" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <line x1="362" y1="155" x2="470" y2="150" stroke="var(--accent)" stroke-width="2" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <line x1="362" y1="160" x2="470" y2="240" stroke="var(--accent)" stroke-width="2" marker-end="url(#ah)" marker-start="url(#ah)"/>
+
+          <!-- operator -->
+          <g font-family="var(--mono)">
+            <rect x="24" y="86" width="94" height="52" rx="7" fill="var(--paper)" stroke="var(--rule)"/>
+            <text x="71" y="108" text-anchor="middle" font-size="12" fill="var(--ink)">Browser</text>
+            <text x="71" y="125" text-anchor="middle" font-size="9" fill="var(--ink-faint)">dashboard</text>
+
+            <rect x="24" y="170" width="94" height="52" rx="7" fill="var(--paper)" stroke="var(--rule)"/>
+            <text x="71" y="192" text-anchor="middle" font-size="12" fill="var(--ink)">Telegram</text>
+            <text x="71" y="209" text-anchor="middle" font-size="9" fill="var(--ink-faint)">sidecar</text>
+          </g>
+
+          <!-- hub -->
+          <g font-family="var(--mono)">
+            <rect x="240" y="120" width="122" height="72" rx="9" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+            <text x="301" y="150" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">HUB</text>
+            <text x="301" y="168" text-anchor="middle" font-size="9" fill="var(--ink-soft)">Pi Zero 2 W</text>
+            <text x="301" y="181" text-anchor="middle" font-size="9" fill="var(--ink-soft)">FastAPI · SQLite</text>
+          </g>
+
+          <!-- nodes + targets -->
+          <g font-family="var(--mono)">
+            <!-- node 1 -->
+            <rect x="472" y="36" width="60" height="46" rx="7" fill="var(--paper)" stroke="var(--rule)"/>
+            <text x="502" y="56" text-anchor="middle" font-size="10" fill="var(--ink)">Pico</text>
+            <text x="502" y="70" text-anchor="middle" font-size="8" fill="var(--ink-faint)">node</text>
+            <line x1="532" y1="59" x2="566" y2="59" stroke="var(--signal)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#ag)" marker-start="url(#ag)"/>
+            <rect x="568" y="42" width="44" height="34" rx="5" fill="var(--signal-soft)" stroke="var(--signal)"/>
+            <text x="590" y="63" text-anchor="middle" font-size="8" fill="var(--ink)">target</text>
+
+            <!-- node 2 -->
+            <rect x="472" y="127" width="60" height="46" rx="7" fill="var(--paper)" stroke="var(--rule)"/>
+            <text x="502" y="147" text-anchor="middle" font-size="10" fill="var(--ink)">Pico</text>
+            <text x="502" y="161" text-anchor="middle" font-size="8" fill="var(--ink-faint)">node</text>
+            <line x1="532" y1="150" x2="566" y2="150" stroke="var(--signal)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#ag)" marker-start="url(#ag)"/>
+            <rect x="568" y="133" width="44" height="34" rx="5" fill="var(--signal-soft)" stroke="var(--signal)"/>
+            <text x="590" y="154" text-anchor="middle" font-size="8" fill="var(--ink)">target</text>
+
+            <!-- node 3 -->
+            <rect x="472" y="218" width="60" height="46" rx="7" fill="var(--paper)" stroke="var(--rule)"/>
+            <text x="502" y="238" text-anchor="middle" font-size="10" fill="var(--ink)">Pico</text>
+            <text x="502" y="252" text-anchor="middle" font-size="8" fill="var(--ink-faint)">node</text>
+            <line x1="532" y1="241" x2="566" y2="241" stroke="var(--signal)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#ag)" marker-start="url(#ag)"/>
+            <rect x="568" y="224" width="44" height="34" rx="5" fill="var(--signal-soft)" stroke="var(--signal)"/>
+            <text x="590" y="245" text-anchor="middle" font-size="8" fill="var(--ink)">target</text>
+          </g>
+        </svg>
+      </div>
+      <div class="legend">
+        <span><i class="wire"></i> HTTP · WebSocket &amp; wire protocol (Ethernet)</span>
+        <span><i class="usb"></i> USB HID keyboard + serial console</span>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section id="features">
+      <div class="sec-head">
+        <p class="eyebrow">What you get</p>
+        <h2>A full operator console, not a wire</h2>
+      </div>
+      <div class="feat">
+        <div class="cell"><h3><span class="g">⌁</span>Networked serial consoles</h3>
+          <p>Read each target's serial console live and type into its serial login, all from the
+            browser over the network — with a real terminal renderer and ANSI cleanup.</p></div>
+        <div class="cell"><h3><span class="g">⌨</span>Keyboard injection</h3>
+          <p>Each node is a USB HID keyboard, so it drives the target everywhere a keyboard works:
+            BIOS, GRUB, initramfs, the OS. Per-node keyboard layouts.</p></div>
+        <div class="cell"><h3><span class="g">❏</span>Macros &amp; quick chords</h3>
+          <p>Reusable HID sequences built from type / keys / wait steps, saved in a library and
+            replayable on any node. Custom quick chords you save and fire.</p></div>
+        <div class="cell"><h3><span class="g">↻</span>Runbooks &amp; expect engine</h3>
+          <p>A wait-for-output expect engine and YAML runbooks you author, view, and edit in the
+            browser — then run across a whole group.</p></div>
+        <div class="cell"><h3><span class="g">⬆</span>OTA firmware updates</h3>
+          <p>Push bundles over the wire: chunked, checksummed, .zip-upload, with canary rollout and
+            watchdog-revert. Firmware-only or settings-only pushes.</p></div>
+        <div class="cell"><h3><span class="g">♥</span>Machine liveness</h3>
+          <p>Prompt-state badges and a machine up/dead badge that tells you whether the <em>target</em>
+            is alive — not just the node — plus a three-method reboot menu.</p></div>
+        <div class="cell"><h3><span class="g">⎘</span>Durable history &amp; replay</h3>
+          <p>Every node, command, result, and output chunk recorded in SQLite. Timestamped event log,
+            asciicast session replay, and a raw serial bridge for minicom / PuTTY.</p></div>
+        <div class="cell"><h3><span class="g">⇄</span>Dual-hub failover</h3>
+          <p>A primary + backup hub per node with a shared node token, runtime steering
+            (move / set-home / pin), offline command queue, and webhook / ntfy alerts.</p></div>
+      </div>
+    </section>
+
+    <!-- PACKAGE / PYPI -->
+    <section id="package">
+      <div class="sec-head">
+        <p class="eyebrow">On PyPI</p>
+        <h2>One wheel, three import surfaces</h2>
+        <p>The hub ships as the <code style="font-family:var(--mono);color:var(--accent-ink)">picotty</code>
+          package, built with the uv build backend. The base install is a lean client; the server and
+          Telegram stacks live behind extras so a client stays small.</p>
+      </div>
+
+      <div class="pkg">
+        <div class="meta">
+          <div class="pname">picotty<span class="v">v1.2.0</span></div>
+          <div class="pills">
+            <span class="pill">GPL-3.0-or-later</span>
+            <span class="pill">Python ≥ 3.11</span>
+            <span class="pill">pip · uv</span>
+            <span class="pill">FastAPI</span>
+            <span class="pill">CircuitPython node</span>
+          </div>
+        </div>
+        <div class="plinks">
+          <a class="btn btn-pri" href="https://pypi.org/project/picotty/" target="_blank" rel="noopener">View on PyPI ↗</a>
+          <a class="btn btn-sec" href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/packaging.md" target="_blank" rel="noopener">Packaging docs ↗</a>
+        </div>
+      </div>
+
+      <div class="surf" style="margin-top:16px">
+        <div class="card"><code>picotty.protocol</code>
+          <p>The wire protocol — version, frame encode/read, send validation.</p>
+          <p class="need">base install</p></div>
+        <div class="card"><code>picotty.client</code>
+          <p>The SDK — <code>HubClient</code> (async REST) + <code>HubEvents</code> (WebSocket).</p>
+          <p class="need">base install</p></div>
+        <div class="card"><code>picotty.hub</code>
+          <p>The FastAPI server behind <code>picotty-hub</code>.</p>
+          <p class="need">[hub] extra</p></div>
+      </div>
+
+      <div class="code" style="margin-top:18px">
+        <button class="copy" type="button" data-copy="pyexample">copy</button>
+        <pre id="pyexample"><span class="cmt"># drive a running hub from the lean client SDK — no server stack needed</span>
+import asyncio
+from picotty.client import HubClient
+
+async def main():
+    async with HubClient(<span class="cm2">"http://hub:8080"</span>) as hub:
+        print(await hub.health())
+        async with hub.events_stream() as stream:
+            await stream.subscribe(<span class="cm2">"node-01"</span>)
+            async for ev in stream:
+                print(ev[<span class="cm2">"event"</span>], ev)
+
+asyncio.run(main())</pre>
+      </div>
+    </section>
+
+    <!-- QUICK START -->
+    <section id="start">
+      <div class="sec-head">
+        <p class="eyebrow">Quick start</p>
+        <h2>Three phases: hub, node, target</h2>
+        <p>Your node ids, hub address, and token live only under <code>private/</code> (gitignored) —
+          nothing machine-specific is committed.</p>
+      </div>
+
+      <div class="step">
+        <div class="n">1</div>
+        <div>
+          <h3>Install the hub</h3>
+          <div class="where">on the Pi Zero 2 W</div>
+          <div class="code">
+            <button class="copy" type="button" data-copy="c1">copy</button>
+            <pre id="c1">uv tool install <span class="cm2">'picotty[hub]'</span>   <span class="cmt"># server stack + both CLIs</span>
+picotty-hub                     <span class="cmt"># → dashboard at http://&lt;hub-ip&gt;:8080</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="n">2</div>
+        <div>
+          <h3>Build &amp; flash a node</h3>
+          <div class="where">on your flashing machine</div>
+          <div class="code">
+            <button class="copy" type="button" data-copy="c2">copy</button>
+            <pre id="c2">bash firmware/scripts/install-deps.sh
+bash firmware/scripts/build.sh --node &lt;id&gt; \
+     --drive /run/media/$USER/CIRCUITPY</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="n">3</div>
+        <div>
+          <h3>Wire up the target</h3>
+          <div class="where">on each managed machine</div>
+          <p style="color:var(--ink-soft);font-size:.92rem;margin-bottom:4px">
+            Point the target's serial console at the node (example for Proxmox):</p>
+          <div class="code">
+            <button class="copy" type="button" data-copy="c3">copy</button>
+            <pre id="c3">sudo bash target-setup/proxmox-serial.sh</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="notice" style="border-left-color:var(--signal);background:var(--signal-soft)">
+        <b>No hardware yet?</b> Run a fake node against the hub with
+        <code style="font-family:var(--mono)">uv run picotty-sim --id demo --token &lt;TOK&gt;</code>
+        and explore the whole dashboard before you solder anything.
+      </div>
+    </section>
+
+    <!-- HARDWARE -->
+    <section id="hardware">
+      <div class="sec-head">
+        <p class="eyebrow">Hardware</p>
+        <h2>A Pico, an Ethernet HAT, one cable</h2>
+        <p>Per target machine: a Raspberry&nbsp;Pi&nbsp;Pico (or Pico&nbsp;2) + a WIZnet W5100S Ethernet
+          HAT + a data-capable USB cable + an Ethernet drop. One shared Pi&nbsp;Zero&nbsp;2&nbsp;W runs
+          the hub. The all-in-one W5100S-EVB-Pico replaces the Pico + HAT.</p>
+      </div>
+      <div class="surf">
+        <div class="card"><code>Pico + HAT</code>
+          <p>SPI Ethernet over the WIZnet W5100S HAT, leaving USB free for the target.</p></div>
+        <div class="card"><code>Pi Zero 2 W</code>
+          <p>One shared hub coordinates the whole swarm and serves the dashboard.</p></div>
+        <div class="card"><code>Enclosure</code>
+          <p>A 3D-printable case — STL, STEP, and editable Fusion 360 source in the repo.</p></div>
+      </div>
+      <p style="margin-top:18px;font-family:var(--mono);font-size:.84rem">
+        → <a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/hardware.md" target="_blank" rel="noopener">Full bill of materials &amp; topology</a>
+      </p>
+    </section>
+
+    <!-- DOCS -->
+    <section id="docs">
+      <div class="sec-head">
+        <p class="eyebrow">Documentation</p>
+        <h2>The full technical reference</h2>
+      </div>
+      <div class="docs">
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/architecture.md" target="_blank" rel="noopener">architecture.md</a><p>Component roles, the single-loop hub, the one-cable USB design, the wire protocol, data model.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/hardware.md" target="_blank" rel="noopener">hardware.md</a><p>Physical topology, bill of materials, component tree, sizing.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/deployment.md" target="_blank" rel="noopener">deployment.md</a><p>The three build phases, the end-to-end workflow, the full script reference.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/firmware.md" target="_blank" rel="noopener">firmware.md</a><p>Firmware lifecycle, LED codes, keyboard layout, OTA capability, hardening.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/dual-hub.md" target="_blank" rel="noopener">dual-hub.md</a><p>Dual-hub failover, runtime steering, the independent-peers model, the shared node token.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/operations.md" target="_blank" rel="noopener">operations.md</a><p>Observability, prompt-state badges, HID vs serial input, session recording, alerting.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/automation.md" target="_blank" rel="noopener">automation.md</a><p>Prompt-state detection, the expect engine, offline command queue, YAML runbooks.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/ota.md" target="_blank" rel="noopener">ota.md</a><p>Over-the-wire firmware updates: the safety model and rollout posture.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/packaging.md" target="_blank" rel="noopener">packaging.md</a><p>The picotty package: import surfaces, extras, entry points, the client SDK, publishing.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/telegram.md" target="_blank" rel="noopener">telegram.md</a><p>The Telegram bot sidecar: stats / alerts / gated terminal over chat.</p></div>
+        <div class="docrow"><a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/considerations.md" target="_blank" rel="noopener">considerations.md</a><p>Security boundary, target requirements, power, roadmap.</p></div>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <div class="foot-grid">
+        <div class="col">
+          <h4>Install</h4>
+          <a href="https://pypi.org/project/picotty/" target="_blank" rel="noopener">PyPI · picotty</a>
+          <a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs/packaging.md" target="_blank" rel="noopener">Packaging guide</a>
+          <a href="#start">Quick start</a>
+        </div>
+        <div class="col">
+          <h4>Source</h4>
+          <a href="https://github.com/morpheuslord/PICOTTY" target="_blank" rel="noopener">GitHub repository</a>
+          <a href="https://github.com/morpheuslord/PICOTTY/issues" target="_blank" rel="noopener">Issues</a>
+          <a href="https://github.com/morpheuslord/PICOTTY/tree/main/docs" target="_blank" rel="noopener">Docs index</a>
+        </div>
+        <div class="col">
+          <h4>Project</h4>
+          <a href="https://github.com/morpheuslord/PICOTTY/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+          <a href="https://github.com/morpheuslord/PICOTTY/blob/main/SECURITY.md" target="_blank" rel="noopener">Security policy</a>
+          <a href="https://github.com/morpheuslord/PICOTTY/blob/main/LICENSE" target="_blank" rel="noopener">License (GPL-3.0)</a>
+        </div>
+      </div>
+      <p class="sign">PICOTTY — a teletype for machines that forgot they had a keyboard.
+        <span class="em">●</span> built for a homelab of headless mini PCs.</p>
+    </div>
+  </footer>
+</main>
+
+<script>
+  // theme toggle (per-viewer convenience)
+  (function(){
+    var root=document.documentElement, btn=document.getElementById('themeBtn');
+    try{var s=localStorage.getItem('picotty-theme'); if(s)root.setAttribute('data-theme',s);}catch(e){}
+    btn.addEventListener('click',function(){
+      var cur=root.getAttribute('data-theme');
+      var next= cur==='dark' ? 'light' : cur==='light' ? 'dark' :
+        (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+      root.setAttribute('data-theme',next);
+      try{localStorage.setItem('picotty-theme',next);}catch(e){}
+    });
+  })();
+
+  // copy buttons
+  document.querySelectorAll('.copy').forEach(function(b){
+    b.addEventListener('click',function(){
+      var el=document.getElementById(b.dataset.copy); if(!el)return;
+      var text=el.innerText;
+      function ok(){var o=b.textContent;b.textContent='copied ✓';b.classList.add('ok');
+        setTimeout(function(){b.textContent=o;b.classList.remove('ok');},1400);}
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(ok).catch(function(){sel(el);});
+      }else{sel(el);}
+      function sel(node){var r=document.createRange();r.selectNodeContents(node);
+        var s=getSelection();s.removeAllRanges();s.addRange(r);}
+    });
+  });
+
+  // hero teletype
+  (function(){
+    var target=document.getElementById('tt');
+    var msg='a teletype for machines that forgot they had a keyboard';
+    var reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(reduce){target.textContent=msg;return;}
+    var i=0;
+    (function tick(){
+      if(i<=msg.length){target.textContent=msg.slice(0,i);i++;setTimeout(tick, 34);}
+    })();
+  })();
+</script>
+</body>
+</html>

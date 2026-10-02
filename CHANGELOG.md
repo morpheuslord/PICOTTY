@@ -2,6 +2,22 @@
 
 All notable changes to PICOTTY. This project adheres to [Semantic Versioning](https://semver.org).
 
+## v1.2.1 — 2026-10-02
+
+Docs/packaging only — no code or firmware changes.
+
+### Added
+
+- **Explainer site + GitHub Pages.** A standalone landing page under `site/`
+  (teletype/phosphor themes, topology diagram, feature grid, PyPI section, quick
+  start, docs map), deployed to <https://morpheuslord.github.io/PICOTTY/> by a new
+  `pages.yml` GitHub Actions workflow on changes to `site/`.
+
+### Changed
+
+- **Project URLs.** The `picotty` `Homepage` and `Documentation` links now point at
+  the published GitHub Pages site instead of the GitHub repo tree.
+
 ## v1.2.0 — 2026-09-06
 
 Building on 1.1.0's dual-hub work: **OTA** gains firmware-only / settings-only
